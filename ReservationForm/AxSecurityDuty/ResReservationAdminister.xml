@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxSecurityDuty xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResReservationAdminister</Name>
+	<Description>@ResReservation:ResReservationAdminister_Description</Description>
+	<Label>@ResReservation:ResReservationAdminister</Label>
+	<Privileges>
+		<AxSecurityPrivilegeReference>
+			<Name>ResReservationScreen_DM_View</Name>
+		</AxSecurityPrivilegeReference>
+		<AxSecurityPrivilegeReference>
+			<Name>ResReservationScreen_AM_Execute</Name>
+		</AxSecurityPrivilegeReference>
+		<AxSecurityPrivilegeReference>
+			<Name>ResSetupDialog_AM_Maintain</Name>
+		</AxSecurityPrivilegeReference>
+	</Privileges>
+</AxSecurityDuty>

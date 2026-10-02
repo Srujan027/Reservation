@@ -1,0 +1,919 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResReservationEngine</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// Implements the Reserve and Unreserve actions per FDD section 7. Sorts selected
+/// Demand lines (order type, then priority tier, then requested ship date), filters
+/// and sorts eligible Supply per the FEFO/FIFO allocation rule, allocates within the
+/// Allow Mixed Batch / Allow Partial Delivery constraints, and commits every
+/// reservation through the standard <c>InventUpd_Reservation</c> engine rather than
+/// reimplementing core reservation logic.
+/// </summary>
+public class ResReservationEngine
+{
+    ResHistoryLogger    historyLogger;
+    ResSupplyLineTmp    supply;
+    int                 linesFullyReserved;
+    int                 linesPartiallyReserved;
+    int                 linesSkipped;
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>construct</Name>
+				<Source><![CDATA[
+    public static ResReservationEngine construct()
+    {
+        ResReservationEngine engine = new ResReservationEngine();
+
+        engine.historyLogger = ResHistoryLogger::construct();
+
+        return engine;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>parmLinesFullyReserved</Name>
+				<Source><![CDATA[
+    public int parmLinesFullyReserved()
+    {
+        return linesFullyReserved;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>parmLinesPartiallyReserved</Name>
+				<Source><![CDATA[
+    public int parmLinesPartiallyReserved()
+    {
+        return linesPartiallyReserved;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>parmLinesSkipped</Name>
+				<Source><![CDATA[
+    public int parmLinesSkipped()
+    {
+        return linesSkipped;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>itemGroupId</Name>
+				<Source><![CDATA[
+    private static ItemGroupId itemGroupId(ItemId _itemId)
+    {
+        return InventTable::find(_itemId).itemGroupId();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>buildSortKey</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Packs order-type rank, priority tier and requested ship date into one
+    /// ascending-sortable int64 so the selected lines can be walked in FDD order
+    /// via a key-ordered <c>Map</c> (Map with an int64 key enumerates in ascending
+    /// key order in X++).
+    /// </summary>
+    /// <param name="_tieBreaker">
+    /// A value unique within the current <c>reserve()</c> call (its loop index is
+    /// enough). Two demand lines can easily land on the exact same
+    /// (order-type rank, tier, ship date) -- e.g. two default-tier customers
+    /// shipping the same day -- and <c>Map.insert</c> silently overwrites on a
+    /// key collision, dropping one line from the run entirely. Folding in a
+    /// per-line tie-breaker below the date's significance guarantees a unique
+    /// key without disturbing the intended FDD ordering.
+    /// </param>
+    private static int64 buildSortKey(
+        ResOrderType    _orderType,
+        ResPriorityTier _tier,
+        TransDate       _shipDate,
+        boolean         _salesFirst,
+        int64           _tieBreaker)
+    {
+        int64 orderTypeRank = (_salesFirst && _orderType == ResOrderType::Transfer) ? 1 : 0;
+        int64 dateRank      = _shipDate ? (_shipDate - mkDate(1, 1, 1900)) : 999999;
+
+        int64 tierRank = _tier;
+
+        return ((orderTypeRank * 100000000000) + (tierRank * 10000000000) + dateRank) * 1000000 + _tieBreaker;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reserve</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Reserves the selected Demand lines. <paramref name="_demandLineTmp"/> must be
+    /// the same buffer instance the form's Demands datasource populated (InMemory
+    /// tables are only visible to buffers sharing the same underlying store).
+    /// </summary>
+    public void reserve(ResDemandLineTmp _demandLineTmp, container _selectedRecIds)
+    {
+        ResDemandLineTmp    demandLine;
+        Map                 sortMap = new Map(Types::Int64, Types::Int64);
+        MapEnumerator       mapEnum;
+        ResOrderTypePolicy  orderTypePolicy = ResSetupRules::orderTypePolicy();
+        boolean             salesFirst      = orderTypePolicy.SalesAlwaysOutranksTransfer == NoYes::Yes;
+        container           itemScope;
+        int                 i;
+
+        linesFullyReserved      = 0;
+        linesPartiallyReserved  = 0;
+        linesSkipped            = 0;
+
+        demandLine.setTmpData(_demandLineTmp);
+
+        for (i = 1; i <= conLen(_selectedRecIds); i++)
+        {
+            select firstonly demandLine
+                where demandLine.RecId == conPeek(_selectedRecIds, i);
+
+            if (demandLine.RecId)
+            {
+                if (!conFind(itemScope, demandLine.ItemId))
+                {
+                    itemScope += demandLine.ItemId;
+                }
+
+                sortMap.insert(
+                    ResReservationEngine::buildSortKey(demandLine.OrderType, demandLine.PriorityTier, demandLine.RequestedShipDate, salesFirst, i),
+                    demandLine.RecId);
+            }
+        }
+
+        ResSupplyProvider::run(supply, itemScope, '', '');
+
+        mapEnum = sortMap.getEnumerator();
+
+        while (mapEnum.moveNext())
+        {
+            select firstonly demandLine
+                where demandLine.RecId == mapEnum.currentValue();
+
+            if (demandLine.RecId)
+            {
+                try
+                {
+                    this.reserveLine(demandLine);
+                }
+                catch (Exception::Error)
+                {
+                    // A single supply row's InventUpd_Reservation apply-failure is
+                    // now caught and handled per-row inside reserveLine()'s pass 2
+                    // loop, so it no longer reaches here. This is a backstop for a
+                    // genuinely unexpected error elsewhere in reserveLine() (e.g.
+                    // before any row was committed) -- record it as a skip and
+                    // keep going with the rest of the selected lines instead of
+                    // aborting the whole batch -- which would otherwise drop
+                    // the summary info() message and the refreshDemands()
+                    // call for lines already committed earlier in this run.
+                    // strFmt (not the raw label) so the logged reason names
+                    // the actual order/line, matching what the original throw
+                    // in commitReservation() would have said.
+                    this.skipLine(demandLine, demandLine.remainingQty(),
+                        strFmt("@ResReservation:ResReservationEngine_ReservationDidNotApply", demandLine.OrderId, demandLine.LineNum));
+                }
+            }
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>eligibleSupplyRecIds</Name>
+				<Source><![CDATA[
+    // BP Deviation Documented
+    // Not a label: this is the configured InventStatusId *code* being matched
+    // against QualityStatusId, not text shown to a user. Routing it through
+    // the label/translation system would actually break the comparison in a
+    // non-English environment, since the runtime would then compare against a
+    // translated word instead of the real configured status id.
+    #define.QuarantineStatusId('Quarantine')
+
+    /// <summary>
+    /// Eligible supply for one item at one site/warehouse, sorted per the
+    /// configured allocation method.
+    /// </summary>
+    /// <remarks>
+    /// The quarantine check compares <c>QualityStatusId</c> against the literal
+    /// #QuarantineStatusId. Update that macro to match the InventStatusId your
+    /// environment actually uses for quarantined stock (this is admin-configured
+    /// data, not a fixed system value).
+    /// </remarks>
+    private container eligibleSupplyRecIds(
+        ItemId              _itemId,
+        InventDimId         _demandDimId,
+        ResAllocationMethod _allocationMethod,
+        NoYes               _allowQuarantined,
+        ResThresholdDays    _nearExpiryBlockDays,
+        InventSiteId        _siteId,
+        InventLocationId    _warehouseId)
+    {
+        ResSupplyLineTmp    supplyLine;
+        container           recIds;
+        Date                today = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        supplyLine.setTmpData(supply);
+
+        if (_allocationMethod == ResAllocationMethod::FEFO)
+        {
+            // Only on-hand batches carry a real ExpirationDate (ResSupplyProvider
+            // leaves it blank for Purchase/Production/TransferInTransit rows,
+            // which have no batch yet). A blank Date sorts before every real
+            // date in "order by ExpirationDate asc", so querying everything
+            // together would let not-yet-received supply jump the queue ahead
+            // of on-hand stock that is genuinely close to expiring -- the
+            // opposite of FEFO. Query supply with a known expiration date
+            // first (true earliest-expiry-first), then append supply with no
+            // expiration date (ordered by when it becomes available instead)
+            // after it.
+            while select supplyLine
+                order by ExpirationDate asc
+                where supplyLine.ItemId == _itemId
+                &&    supplyLine.InventSiteId     == _siteId
+                &&    supplyLine.InventLocationId == _warehouseId
+                &&    supplyLine.QualityApproved == NoYes::Yes
+                &&   (_allowQuarantined == NoYes::Yes || supplyLine.QualityStatusId != #QuarantineStatusId)
+                &&    supplyLine.ExpirationDate
+                &&   (!_nearExpiryBlockDays || (supplyLine.ExpirationDate - today) > _nearExpiryBlockDays)
+                &&    (supplyLine.AvailableForReservation - supplyLine.QtyReserved) > 0
+            {
+                if (ResReservationEngine::sameProductDimension(_demandDimId, supplyLine.InventDimId))
+                {
+                    recIds += supplyLine.RecId;
+                }
+            }
+
+            while select supplyLine
+                order by AvailableDate asc
+                where supplyLine.ItemId == _itemId
+                &&    supplyLine.InventSiteId     == _siteId
+                &&    supplyLine.InventLocationId == _warehouseId
+                &&    supplyLine.QualityApproved == NoYes::Yes
+                &&   (_allowQuarantined == NoYes::Yes || supplyLine.QualityStatusId != #QuarantineStatusId)
+                &&   !supplyLine.ExpirationDate
+                &&    (supplyLine.AvailableForReservation - supplyLine.QtyReserved) > 0
+            {
+                if (ResReservationEngine::sameProductDimension(_demandDimId, supplyLine.InventDimId))
+                {
+                    recIds += supplyLine.RecId;
+                }
+            }
+        }
+        else if (_allocationMethod == ResAllocationMethod::FIFO)
+        {
+            while select supplyLine
+                order by AvailableDate asc
+                where supplyLine.ItemId == _itemId
+                &&    supplyLine.InventSiteId     == _siteId
+                &&    supplyLine.InventLocationId == _warehouseId
+                &&    supplyLine.QualityApproved == NoYes::Yes
+                &&   (_allowQuarantined == NoYes::Yes || supplyLine.QualityStatusId != #QuarantineStatusId)
+                &&   (!_nearExpiryBlockDays || !supplyLine.ExpirationDate || (supplyLine.ExpirationDate - today) > _nearExpiryBlockDays)
+                &&    (supplyLine.AvailableForReservation - supplyLine.QtyReserved) > 0
+            {
+                if (ResReservationEngine::sameProductDimension(_demandDimId, supplyLine.InventDimId))
+                {
+                    recIds += supplyLine.RecId;
+                }
+            }
+        }
+        else
+        {
+            // ResAllocationMethod::LIFO -- same eligibility filters as FIFO,
+            // just newest-available-first instead of oldest-available-first.
+            while select supplyLine
+                order by AvailableDate desc
+                where supplyLine.ItemId == _itemId
+                &&    supplyLine.InventSiteId     == _siteId
+                &&    supplyLine.InventLocationId == _warehouseId
+                &&    supplyLine.QualityApproved == NoYes::Yes
+                &&   (_allowQuarantined == NoYes::Yes || supplyLine.QualityStatusId != #QuarantineStatusId)
+                &&   (!_nearExpiryBlockDays || !supplyLine.ExpirationDate || (supplyLine.ExpirationDate - today) > _nearExpiryBlockDays)
+                &&    (supplyLine.AvailableForReservation - supplyLine.QtyReserved) > 0
+            {
+                if (ResReservationEngine::sameProductDimension(_demandDimId, supplyLine.InventDimId))
+                {
+                    recIds += supplyLine.RecId;
+                }
+            }
+        }
+
+        return recIds;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>sameProductDimension</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// True if two dimensions represent the same item variant -- i.e. they
+    /// agree on every product dimension (configuration, size, color, style,
+    /// version). Site, warehouse, batch and other storage/tracking dimensions
+    /// are deliberately NOT compared here: those are exactly what FEFO/FIFO is
+    /// choosing between. Without this check, eligibleSupplyRecIds() could hand
+    /// back supply for a different variant of the same item at the same
+    /// site/warehouse; commitReservation() would then try to reserve that
+    /// InventDim against a sales/transfer line requesting a different variant,
+    /// which InventUpd_Reservation silently refuses (AllowAutoReserveDim is
+    /// forced off), surfacing later as ResReservationEngine_ReservationDidNotApply.
+    /// </summary>
+    private static boolean sameProductDimension(InventDimId _demandDimId, InventDimId _supplyDimId)
+    {
+        InventDim demandDim = InventDim::find(_demandDimId);
+        InventDim supplyDim = InventDim::find(_supplyDimId);
+
+        return demandDim.configId        == supplyDim.configId
+            && demandDim.inventSizeId    == supplyDim.inventSizeId
+            && demandDim.inventColorId   == supplyDim.inventColorId
+            && demandDim.inventStyleId   == supplyDim.inventStyleId
+            && demandDim.inventVersionId == supplyDim.inventVersionId;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>largestSingleSupplyRecId</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Of the given candidate supply rows, returns the single one with the
+    /// most quantity available for reservation (empty container if none have
+    /// any). Used when mixing batches/sources is not allowed, instead of
+    /// simply taking whichever row the FEFO/FIFO order happens to put first.
+    /// </summary>
+    private container largestSingleSupplyRecId(container _recIds)
+    {
+        ResSupplyLineTmp    supplyLine;
+        Qty                 bestAvailable;
+        RecId               bestRecId;
+        int                 i;
+
+        supplyLine.setTmpData(supply);
+
+        for (i = 1; i <= conLen(_recIds); i++)
+        {
+            Qty available;
+
+            select firstonly supplyLine
+                where supplyLine.RecId == conPeek(_recIds, i);
+
+            available = supplyLine.AvailableForReservation - supplyLine.QtyReserved;
+
+            if (available > bestAvailable)
+            {
+                bestAvailable   = available;
+                bestRecId       = supplyLine.RecId;
+            }
+        }
+
+        return bestRecId ? [bestRecId] : conNull();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reserveLine</Name>
+				<Source><![CDATA[
+    private void reserveLine(ResDemandLineTmp _demandLine)
+    {
+        ResSupplyLineTmp    supplyLine;
+        ItemGroupId   itemGroupId          = ResReservationEngine::itemGroupId(_demandLine.ItemId);
+        Qty                 remainingNeed        = _demandLine.remainingQty();
+        Qty                 totalEligible        = 0;
+        Qty                 allocatedQty         = 0;
+        NoYes               allowPartial;
+        NoYes               allowMixedBatch;
+        ResFillPercentage   minFillPercentage;
+        ResThresholdDays    nearExpiryBlockDays  = ResSetupRules::nearExpiryBlockDays(_demandLine.ItemId, itemGroupId);
+        NoYes               allowQuarantined     = ResSetupRules::allowQuarantined(_demandLine.ItemId, itemGroupId);
+        ResAllocationMethod allocationMethod     = ResSetupRules::allocationMethod(_demandLine.ItemId, itemGroupId);
+        container           recIds;
+        int                 i;
+
+        if (remainingNeed <= 0)
+        {
+            return;
+        }
+
+        if (_demandLine.OrderType == ResOrderType::Sales)
+        {
+            CustGroupId custGroup = CustTable::find(_demandLine.CustAccount).CustGroup;
+
+            allowPartial      = ResSetupRules::allowPartialDeliverySales(_demandLine.CustAccount, custGroup);
+            allowMixedBatch   = ResSetupRules::allowMixedBatchSales(_demandLine.CustAccount, custGroup);
+            minFillPercentage = ResSetupRules::minFillPercentageSales(_demandLine.CustAccount, custGroup);
+        }
+        else
+        {
+            ResOrderTypePolicy orderTypePolicy = ResSetupRules::orderTypePolicy();
+
+            allowPartial      = orderTypePolicy.TransferAllowPartial;
+            allowMixedBatch   = orderTypePolicy.TransferAllowMixedBatch;
+            minFillPercentage = orderTypePolicy.TransferMinFillPercentage;
+        }
+
+        recIds = this.eligibleSupplyRecIds(
+            _demandLine.ItemId, _demandLine.InventDimId, allocationMethod, allowQuarantined, nearExpiryBlockDays,
+            _demandLine.InventSiteId, _demandLine.InventLocationId);
+
+        if (!allowMixedBatch)
+        {
+            // Only one batch/source may be used -- pick the single largest one
+            // available rather than whichever the FEFO/FIFO order surfaces first,
+            // so a small near-expiry batch doesn't out-rank a large one that could
+            // actually cover the order.
+            recIds = this.largestSingleSupplyRecId(recIds);
+        }
+
+        supplyLine.setTmpData(supply);
+
+        // Pass 1: how much can we cover in total, without committing anything yet.
+        for (i = 1; i <= conLen(recIds); i++)
+        {
+            select firstonly supplyLine
+                where supplyLine.RecId == conPeek(recIds, i);
+
+            totalEligible += (supplyLine.AvailableForReservation - supplyLine.QtyReserved);
+
+            if (totalEligible >= remainingNeed)
+            {
+                break;
+            }
+        }
+
+        if (totalEligible <= 0)
+        {
+            this.skipLine(_demandLine, remainingNeed, "@ResReservation:ResReservationEngine_NoEligibleSupply");
+            return;
+        }
+
+        if (totalEligible < remainingNeed && allowPartial != NoYes::Yes)
+        {
+            this.skipLine(_demandLine, remainingNeed, "@ResReservation:ResReservationEngine_PartialNotAllowed");
+            return;
+        }
+
+        // Partial delivery is allowed, but only down to a configured floor --
+        // a 0 minimum (the field's default) means no floor is enforced. Only
+        // relevant once we already know this is a genuine partial (totalEligible
+        // < remainingNeed); a full cover never needs this check.
+        if (totalEligible < remainingNeed && minFillPercentage > 0
+            && (totalEligible / remainingNeed * 100) < minFillPercentage)
+        {
+            this.skipLine(_demandLine, remainingNeed, "@ResReservation:ResReservationEngine_BelowMinimumFill");
+            return;
+        }
+
+        // Pass 2: commit for real, one supply row (one batch) at a time.
+        for (i = 1; i <= conLen(recIds); i++)
+        {
+            Qty thisAllocation;
+
+            if (allocatedQty >= remainingNeed)
+            {
+                break;
+            }
+
+            select firstonly supplyLine
+                where supplyLine.RecId == conPeek(recIds, i);
+
+            thisAllocation = min(remainingNeed - allocatedQty, supplyLine.AvailableForReservation - supplyLine.QtyReserved);
+
+            if (thisAllocation <= 0)
+            {
+                continue;
+            }
+
+            try
+            {
+                this.commitReservation(_demandLine, supplyLine, thisAllocation, allocationMethod);
+            }
+            catch (Exception::Error)
+            {
+                // This one supply row failed to apply (InventUpd_Reservation
+                // silently no-op'd) -- skip just this row and keep trying the
+                // rest of the eligible supply, so a failure on e.g. the 2nd of
+                // 3 batches doesn't discard the 1st batch's already-committed,
+                // already-logged reservation. The full/partial/skip decision
+                // below is made from the real allocatedQty, so it stays correct
+                // regardless of where in this loop a row failed.
+                continue;
+            }
+
+            supplyLine.QtyReserved += thisAllocation;
+            supplyLine.update();
+
+            allocatedQty += thisAllocation;
+        }
+
+        if (allocatedQty <= 0)
+        {
+            this.skipLine(_demandLine, remainingNeed, "@ResReservation:ResReservationEngine_NoEligibleSupply");
+        }
+        else if (allocatedQty >= remainingNeed)
+        {
+            linesFullyReserved++;
+        }
+        else
+        {
+            linesPartiallyReserved++;
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>sourceBuffer</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Selects the SalesLine/InventTransferLine behind a demand line, forUpdate.
+    /// </summary>
+    private Common sourceBuffer(ResDemandLineTmp _demandLine)
+    {
+        SalesLine           salesLine;
+        InventTransferLine  transferLine;
+
+        if (_demandLine.OrderType == ResOrderType::Sales)
+        {
+            salesLine.selectForUpdate(true);
+            select firstonly salesLine
+                where salesLine.RecId == _demandLine.RefRecId;
+
+            return salesLine;
+        }
+
+        transferLine.selectForUpdate(true);
+        select firstonly transferLine
+            where transferLine.RecId == _demandLine.RefRecId;
+
+        return transferLine;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>commitReservation</Name>
+				<Source><![CDATA[
+    private void commitReservation(
+        ResDemandLineTmp    _demandLine,
+        ResSupplyLineTmp    _supplyLine,
+        Qty                 _qty,
+        ResAllocationMethod _allocationMethod)
+    {
+        Qty                     reservedBefore = ResDemandProvider::currentReservedQty(_demandLine.OrderType, _demandLine.RefRecId);
+        Qty                     reservedAfter;
+        Common                  sourceBuffer;
+        InventDim               inventDim;
+        InventDimParm           inventDimParm;
+        InventUpd_Reservation   reservation;
+
+        ttsbegin;
+
+        sourceBuffer = this.sourceBuffer(_demandLine);
+
+        // Reserve against the EXACT dimension/batch (_supplyLine.InventDimId) our
+        // FEFO/FIFO allocation picked -- ResSupplyProvider populates InventDimId
+        // from the real underlying record (InventSum/PurchLine/ProdTable/
+        // InventTransferLine) for every supply row, so this is always a concrete,
+        // resolvable dimension, never blank.
+        //
+        // This is the same building block (InventUpd_Reservation::newParameters)
+        // that the standard, interactive batch-selection "Reserve" dialog bottoms
+        // out to via InventOnhandReserve.updateReserveLot() ->
+        // InventUpd_Reservation.updateReserveFromForm() ->
+        // InventUpd_Reservation.newParametersFromForm() (see
+        // ApplicationSuite\Foundation\AxClass\InventOnhandReserve.xml and
+        // InventUpd_Reservation.xml). What actually pins the reservation to the
+        // exact batch/dimension we picked is InventUpd_WHSReservation.
+        // updateInventTransAndAdjustVariables() unconditionally writing our
+        // target dimension onto whatever InventTrans it finds/splits (see the
+        // remarks further below) -- AllowAutoReserveDim is not consulted
+        // anywhere in that path (verified against the framework source; grep
+        // finds no reference to it in InventUpdateReserveMore or
+        // InventUpd_WHSReservation), so it is left at its safe default (false)
+        // here rather than relied on for anything.
+        //
+        // Sign convention: InventUpd_Reservation.updateReservationImpl() does
+        // `if (reservation > 0) updateReserveLess(); else updateReserveMore();`
+        // -- i.e. the sign follows InventTrans.Qty's own convention (negative
+        // for an issue-side document like SalesLine/outbound InventTransferLine),
+        // NOT "positive = add more reserved". To INCREASE the reservation here,
+        // the delta must be negative.
+        inventDim = InventDim::find(_supplyLine.InventDimId);
+
+        // For a WHS-enabled (advanced warehousing) site/warehouse, InventSum --
+        // and therefore _supplyLine.InventDimId -- is tracked per physical
+        // bin/license plate, not just per batch. This dimension is where the
+        // stock our FEFO/FIFO pick actually is: clearing the bin/license plate
+        // here (an earlier version of this code did) points the reservation at
+        // the *no-bin* variant of this dimension instead, which InventSum never
+        // carries real quantity against on a WHS site -- InventUpd_Reservation
+        // then reports "0.00 available" and the reservation fails, even though
+        // the exact bin we picked has stock.
+        inventDimParm.initFromInventDim(inventDim);
+
+        // Verified directly against the standard framework source
+        // (InventUpd_WHSReservation.selectInventTransForUpdate() /
+        // InventDimQueryBuilder.selectedInventDimClause()): a *Flag = Yes marks
+        // that field as required to already match between the criteria and the
+        // pre-existing issue InventTrans being searched for -- it is a FIND
+        // constraint, not a "pin this value" instruction. Our sales/transfer
+        // line's own InventTrans has no batch, bin or license plate assigned yet
+        // (that only happens later, via WHS work/wave for bin/LP, or right here
+        // for batch), so requiring any of the three to already match leaves
+        // nothing to find and the reservation silently no-ops. Batch integrity
+        // is NOT at risk from turning these off: once a matching trans row is
+        // found, InventUpd_WHSReservation.updateInventTransAndAdjustVariables()
+        // unconditionally overwrites its InventDimId with our exact target
+        // dimension (`inventTrans.InventDimId = inventDimTransUpdate.InventDimId`)
+        // -- i.e. the FEFO/FIFO-picked batch+bin always gets written, regardless
+        // of these flags. AllowAutoReserveDim plays no part in any of this --
+        // confirmed by grep, it is not referenced anywhere in either
+        // InventUpdateReserveMore or InventUpd_WHSReservation.
+        inventDimParm.InventBatchIdFlag = NoYes::No;
+        inventDimParm.WMSLocationIdFlag = NoYes::No;
+        inventDimParm.LicensePlateFlag  = NoYes::No;
+
+        reservation = InventUpd_Reservation::newParameters(
+            InventMovement::construct(sourceBuffer),
+            inventDim,
+            inventDimParm,
+            0,
+            -_qty,
+            true,
+            false);
+        reservation.parmAllowAutoReserveDim(false);
+        reservation.updateNow();
+
+        ttscommit;
+
+        // Verify the reservation actually moved before claiming success -- these
+        // InventUpd_Reservation entry points can silently no-op (no error, no
+        // exception) if the movement/dimension can't be built or has no capacity.
+        reservedAfter = ResDemandProvider::currentReservedQty(_demandLine.OrderType, _demandLine.RefRecId);
+
+        if ((reservedAfter - reservedBefore) < (_qty - 0.001))
+        {
+            throw error(strFmt("@ResReservation:ResReservationEngine_ReservationDidNotApply", _demandLine.OrderId, _demandLine.LineNum));
+        }
+
+        historyLogger.log(
+            _demandLine.OrderType,
+            _demandLine.OrderId,
+            _demandLine.LineNum,
+            ResAction::Reserve,
+            _qty,
+            _supplyLine.BatchId,
+            strFmt("%1 allocation from %2", enum2str(_allocationMethod), _supplyLine.SourceId ? _supplyLine.SourceId : enum2str(_supplyLine.SupplyType)),
+            '',
+            '',
+            _supplyLine.RefTableId,
+            _supplyLine.RefRecId);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>skipLine</Name>
+				<Source><![CDATA[
+    private void skipLine(ResDemandLineTmp _demandLine, Qty _qty, str _reasonLabel)
+    {
+        linesSkipped++;
+
+        historyLogger.log(
+            _demandLine.OrderType,
+            _demandLine.OrderId,
+            _demandLine.LineNum,
+            ResAction::Skip,
+            _qty,
+            '',
+            _reasonLabel);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>unreserve</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Releases reservations on the selected Demand lines. A reason code is
+    /// mandatory; comment is optional. <paramref name="_demandLineTmp"/> must be the
+    /// same buffer instance the form's Demands datasource populated.
+    /// </summary>
+    public void unreserve(
+        ResDemandLineTmp _demandLineTmp,
+        container        _selectedRecIds,
+        ResReasonCodeId  _reasonCode,
+        ResCommentTxt    _comment)
+    {
+        ResDemandLineTmp demandLine;
+        int              i;
+
+        if (!ResReasonCode::exist(_reasonCode))
+        {
+            throw error("@ResReservation:ResReservationEngine_ReasonCodeRequired");
+        }
+
+        demandLine.setTmpData(_demandLineTmp);
+
+        for (i = 1; i <= conLen(_selectedRecIds); i++)
+        {
+            select firstonly demandLine
+                where demandLine.RecId == conPeek(_selectedRecIds, i);
+
+            if (demandLine.RecId && demandLine.ReservedQty > 0)
+            {
+                try
+                {
+                    this.unreserveLine(demandLine, _reasonCode, _comment);
+                }
+                catch (Exception::Error)
+                {
+                    // Same reasoning as reserve()'s catch above -- don't let
+                    // one line's InventUpd_Reservation failure abort the rest
+                    // of the selected lines. strFmt (not the raw label) so
+                    // the logged reason names the actual order/line, matching
+                    // what the original throw in unreserveLine() would have said.
+                    historyLogger.log(
+                        demandLine.OrderType,
+                        demandLine.OrderId,
+                        demandLine.LineNum,
+                        ResAction::Skip,
+                        demandLine.ReservedQty,
+                        '',
+                        strFmt("@ResReservation:ResReservationEngine_UnreservationDidNotApply", demandLine.OrderId, demandLine.LineNum));
+                }
+            }
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>unreserveLine</Name>
+				<Source><![CDATA[
+    private void unreserveLine(
+        ResDemandLineTmp    _demandLine,
+        ResReasonCodeId     _reasonCode,
+        ResCommentTxt       _comment)
+    {
+        Qty     reservedBefore  = ResDemandProvider::currentReservedQty(_demandLine.OrderType, _demandLine.RefRecId);
+        // Cap the release at what's actually reserved right now rather than
+        // trusting the Demands grid's buffer, which was loaded earlier and can
+        // be stale by the time the user confirms the modal reason dialog (e.g.
+        // another process already released part of it in the meantime). Without
+        // this, releasing more than what's live would make the post-check below
+        // throw and log the whole line as a failed Unreserve, even though a
+        // correct partial release was possible.
+        Qty     qtyToRelease    = min(_demandLine.ReservedQty, reservedBefore);
+        Qty     reservedAfter;
+        Common  sourceBuffer;
+
+        ttsbegin;
+
+        sourceBuffer = this.sourceBuffer(_demandLine);
+
+        // Same InventUpd_Reservation entry point as commitReservation, just with the
+        // opposite sign -- this is the real, standard way both directions are
+        // handled (see e.g. the standard SalesReleaseOrderPicking form's
+        // reserveNow()/reservQty pattern), not a separate API. Per
+        // updateReservationImpl()'s dispatch (positive -> updateReserveLess()),
+        // releasing/reducing a reservation takes a POSITIVE delta here.
+        InventUpd_Reservation::updateReserveBuffer(sourceBuffer, qtyToRelease);
+
+        ttscommit;
+
+        reservedAfter = ResDemandProvider::currentReservedQty(_demandLine.OrderType, _demandLine.RefRecId);
+
+        if ((reservedBefore - reservedAfter) < (qtyToRelease - 0.001))
+        {
+            throw error(strFmt("@ResReservation:ResReservationEngine_UnreservationDidNotApply", _demandLine.OrderId, _demandLine.LineNum));
+        }
+
+        this.creditBackSupplyAllocations(_demandLine, qtyToRelease, _reasonCode, _comment);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>creditBackSupplyAllocations</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Logs the Unreserve side of releasing a demand line, crediting back
+    /// exactly the specific supply records (<c>SupplyRefTableId</c>/
+    /// <c>SupplyRefRecId</c>) that were originally reserved from -- so
+    /// <c>ResHistoryLog.consumedForSupplyRef</c>'s running total for each
+    /// Purchase/Production/TransferInTransit line nets back to what it was
+    /// before this line's reservation, instead of only ever growing.
+    /// </summary>
+    /// <remarks>
+    /// A mixed-batch reservation can have drawn from several different supply
+    /// records via separate <c>commitReservation</c> calls (each already
+    /// logged with its own supply reference); this writes one matching
+    /// Unreserve row per still-outstanding supply reference, capped at
+    /// whatever's left of <paramref name="_qtyToRelease"/>, mirroring the
+    /// same one-row-per-supply-source granularity Reserve already has.  Any
+    /// remainder with no supply reference to credit (reservations logged
+    /// before this tracking existed) falls back to one untargeted row, the
+    /// same way this method's only entry always looked before.
+    /// </remarks>
+    private void creditBackSupplyAllocations(
+        ResDemandLineTmp    _demandLine,
+        Qty                 _qtyToRelease,
+        ResReasonCodeId     _reasonCode,
+        ResCommentTxt       _comment)
+    {
+        ResHistoryLog   reserveLog;
+        ResHistoryLog   releasedLog;
+        ResHistoryLog   batchLookup;
+        Qty             remaining = _qtyToRelease;
+
+        while select sum(QtyAffected), SupplyRefTableId, SupplyRefRecId from reserveLog
+            group by reserveLog.SupplyRefTableId, reserveLog.SupplyRefRecId
+            where reserveLog.OrderType         == _demandLine.OrderType
+            &&    reserveLog.OrderId           == _demandLine.OrderId
+            &&    reserveLog.LineNum           == _demandLine.LineNum
+            &&    reserveLog.Action            == ResAction::Reserve
+            &&    reserveLog.SupplyRefRecId    != 0
+        {
+            Qty totalReservedForRef = reserveLog.QtyAffected;
+            Qty alreadyReleasedForRef;
+            Qty outstandingForRef;
+
+            if (remaining <= 0)
+            {
+                break;
+            }
+
+            select sum(QtyAffected) from releasedLog
+                where releasedLog.OrderType        == _demandLine.OrderType
+                &&    releasedLog.OrderId          == _demandLine.OrderId
+                &&    releasedLog.LineNum          == _demandLine.LineNum
+                &&    releasedLog.Action           == ResAction::Unreserve
+                &&    releasedLog.SupplyRefTableId == reserveLog.SupplyRefTableId
+                &&    releasedLog.SupplyRefRecId   == reserveLog.SupplyRefRecId;
+            alreadyReleasedForRef = releasedLog.QtyAffected;
+
+            outstandingForRef = min(totalReservedForRef - alreadyReleasedForRef, remaining);
+
+            if (outstandingForRef <= 0)
+            {
+                continue;
+            }
+
+            select firstonly BatchId from batchLookup
+                where batchLookup.OrderType        == _demandLine.OrderType
+                &&    batchLookup.OrderId          == _demandLine.OrderId
+                &&    batchLookup.LineNum          == _demandLine.LineNum
+                &&    batchLookup.Action           == ResAction::Reserve
+                &&    batchLookup.SupplyRefTableId == reserveLog.SupplyRefTableId
+                &&    batchLookup.SupplyRefRecId   == reserveLog.SupplyRefRecId;
+
+            historyLogger.log(
+                _demandLine.OrderType,
+                _demandLine.OrderId,
+                _demandLine.LineNum,
+                ResAction::Unreserve,
+                outstandingForRef,
+                batchLookup.BatchId,
+                "@ResReservation:ResReservationEngine_ManualUnreserve",
+                _reasonCode,
+                _comment,
+                reserveLog.SupplyRefTableId,
+                reserveLog.SupplyRefRecId);
+
+            remaining -= outstandingForRef;
+        }
+
+        if (remaining > 0.001)
+        {
+            historyLogger.log(
+                _demandLine.OrderType,
+                _demandLine.OrderId,
+                _demandLine.LineNum,
+                ResAction::Unreserve,
+                remaining,
+                '',
+                "@ResReservation:ResReservationEngine_ManualUnreserve",
+                _reasonCode,
+                _comment);
+        }
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

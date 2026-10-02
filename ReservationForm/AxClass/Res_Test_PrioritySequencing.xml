@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_Test_PrioritySequencing</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// FDD section 7 -- priority and sequencing. Maps to the "Priority and
+/// sequencing" scenario group.
+/// </summary>
+[SysTestCaseAutomaticNumberSequences]
+public class Res_Test_PrioritySequencing extends SysTestCase
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>demandForItem</Name>
+				<Source><![CDATA[
+    private ResDemandLineTmp demandForItem(ItemId _itemId)
+    {
+        ResDemandLineTmp demandTmp;
+
+        ResDemandProvider::run(demandTmp, '', '', _itemId, dateNull(), dateNull());
+
+        return demandTmp;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>allRecIds</Name>
+				<Source><![CDATA[
+    private container allRecIds(ResDemandLineTmp _demandTmp)
+    {
+        ResDemandLineTmp demandTmp;
+        container recIds;
+
+        demandTmp.setTmpData(_demandTmp);
+
+        while select demandTmp
+        {
+            recIds += demandTmp.RecId;
+        }
+
+        return recIds;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>tier1BeforeTier2AndUnassignedDefaultsToTier5Last</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Tier 1 demand should be reserved before Tier 2, and a customer with no
+    /// <c>ResPriorityRule</c> row at all should default to Tier 5 and be
+    /// processed last.
+    /// </summary>
+    [SysTestMethod]
+    public void tier1BeforeTier2AndUnassignedDefaultsToTier5Last()
+    {
+        const ItemId    itemId      = 'RPQ01';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       shipDate    = DateTimeUtil::date(DateTimeUtil::utcNow()) + 10;
+        ResDemandLineTmp demandTmp;
+        ResReservationEngine engine;
+
+        Res_TestDataBuilder::setPriorityRule('RPQ01T1', '', 1);
+        Res_TestDataBuilder::setPriorityRule('RPQ01T2', '', 2);
+        // RPQ01T3 intentionally has no ResPriorityRule row -> should default to tier 5.
+        Res_TestDataBuilder::setDeliveryPolicy('RPQ01T1', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RPQ01T2', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RPQ01T3', NoYes::No, NoYes::No);
+
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 20); // enough for exactly 2 of the 3 lines below
+
+        var line1 = Res_TestDataBuilder::salesLine(item, 'RPQ01T1', warehouse, 10, shipDate);
+        var line2 = Res_TestDataBuilder::salesLine(item, 'RPQ01T2', warehouse, 10, shipDate);
+        var line3 = Res_TestDataBuilder::salesLine(item, 'RPQ01T3', warehouse, 10, shipDate);
+
+        demandTmp = this.demandForItem(itemId);
+
+        engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, this.allRecIds(demandTmp));
+
+        this.assertTrue(engine.parmLinesFullyReserved() == 2, 'Expected exactly 2 lines (tier 1 and tier 2) fully reserved.');
+        this.assertTrue(engine.parmLinesSkipped() == 1, 'Expected exactly 1 line (unassigned/tier-5 default) skipped.');
+
+        ResDemandLineTmp afterReserve = this.demandForItem(itemId);
+        ResDemandLineTmp check;
+        check.setTmpData(afterReserve);
+
+        select firstonly check where check.OrderId == line3.SalesId;
+        this.assertTrue(check.ReservationStatus == ResReservationStatus::None,
+            'Customer with no priority rule (defaulted to tier 5) should be the one left unreserved.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>salesAlwaysOutranksTransferWhenEnabled</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// With <c>SalesAlwaysOutranksTransfer = Yes</c>, a Sales line must be
+    /// sequenced ahead of a Transfer line even when both carry the same
+    /// effective priority tier (Transfer demand is always tier 5).
+    /// </summary>
+    [SysTestMethod]
+    public void salesAlwaysOutranksTransferWhenEnabled()
+    {
+        const ItemId    itemId      = 'RPQ02';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  fromWh      = Res_TestDataBuilder::issuingWarehouse();
+        InventLocation  toWh        = Res_TestDataBuilder::receivingWarehouse();
+        TransDate       shipDate    = DateTimeUtil::date(DateTimeUtil::utcNow()) + 10;
+        ResDemandLineTmp demandTmp;
+        ResReservationEngine engine;
+
+        Res_TestDataBuilder::setPriorityRule('RPQ02CU', '', 5); // same nominal tier as the transfer line's fixed tier 5
+        Res_TestDataBuilder::setDeliveryPolicy('RPQ02CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::setOrderTypePolicy(NoYes::Yes, NoYes::No);
+
+        Res_TestDataBuilder::addOnHand(item, [fromWh], 10); // enough for exactly one of the two lines
+
+        var salesLine    = Res_TestDataBuilder::salesLine(item, 'RPQ02CU', fromWh, 10, shipDate);
+        var transferLine = Res_TestDataBuilder::transferLine(item, fromWh, toWh, 10, shipDate);
+
+        demandTmp = this.demandForItem(itemId);
+        engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, this.allRecIds(demandTmp));
+
+        ResDemandLineTmp afterReserve = this.demandForItem(itemId);
+        ResDemandLineTmp checkSales, checkTransfer;
+        checkSales.setTmpData(afterReserve);
+        checkTransfer.setTmpData(afterReserve);
+
+        select firstonly checkSales where checkSales.OrderType == ResOrderType::Sales && checkSales.OrderId == salesLine.SalesId;
+        select firstonly checkTransfer where checkTransfer.OrderType == ResOrderType::Transfer && checkTransfer.OrderId == transferLine.TransferId;
+
+        this.assertTrue(checkSales.ReservationStatus == ResReservationStatus::Full,
+            'Sales line should win the only available supply when SalesAlwaysOutranksTransfer = Yes.');
+        this.assertTrue(checkTransfer.ReservationStatus == ResReservationStatus::None,
+            'Transfer line should be left unreserved when SalesAlwaysOutranksTransfer = Yes.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>identicalSortKeysSilentlyDropALine</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// KNOWN MISMATCH: <c>ResReservationEngine.reserve()</c> keys its sort
+    /// <c>Map</c> by (order-type rank, tier, ship date) via <c>buildSortKey</c>
+    /// and calls <c>sortMap.insert(key, demandLine.RecId)</c>. When two
+    /// distinct demand lines produce the same composite key (e.g. two
+    /// default-tier-5 Sales lines requesting the same ship date -- a common,
+    /// not edge-case, real-world combination), <c>Map.insert</c> silently
+    /// overwrites the first entry: one of the two lines is never even
+    /// attempted, with no Skip log row and no user-facing message. This test
+    /// is written to the FDD's implied guarantee ("every selected line is
+    /// processed, in FDD order") and is expected to FAIL against the current
+    /// implementation.
+    /// </summary>
+    [SysTestMethod]
+    public void identicalSortKeysSilentlyDropALine()
+    {
+        const ItemId    itemId      = 'RPQ03';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       shipDate    = DateTimeUtil::date(DateTimeUtil::utcNow()) + 10;
+        ResDemandLineTmp demandTmp;
+        ResReservationEngine engine;
+
+        // Both customers left unassigned -> both default to tier 5 -> identical
+        // (orderTypeRank, tierRank, dateRank) sort key for both lines.
+        Res_TestDataBuilder::setDeliveryPolicy('RPQ03CA', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RPQ03CB', NoYes::No, NoYes::No);
+
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 20); // ample supply for both lines
+
+        var lineA = Res_TestDataBuilder::salesLine(item, 'RPQ03CA', warehouse, 10, shipDate);
+        var lineB = Res_TestDataBuilder::salesLine(item, 'RPQ03CB', warehouse, 10, shipDate);
+
+        demandTmp = this.demandForItem(itemId);
+        engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, this.allRecIds(demandTmp));
+
+        this.assertTrue(engine.parmLinesFullyReserved() == 2,
+            'Both lines have ample supply and no reason to be skipped -- expected both fully reserved. ' +
+            'A count of 1 here reproduces the sort-key-collision bug: one line silently never reached reserveLine().');
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

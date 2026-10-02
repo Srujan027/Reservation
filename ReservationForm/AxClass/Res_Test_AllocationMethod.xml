@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_Test_AllocationMethod</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// FDD section 7 -- allocation method (FEFO/FIFO), near-expiry blocking and
+/// quarantine exclusion.
+/// </summary>
+[SysTestCaseAutomaticNumberSequences]
+public class Res_Test_AllocationMethod extends SysTestCase
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>reserveWholeDemand</Name>
+				<Source><![CDATA[
+    private ResReservationEngine reserveWholeDemand(ItemId _itemId)
+    {
+        ResDemandLineTmp    demandTmp;
+        ResDemandLineTmp    demandLine;
+        container           recIds;
+        ResReservationEngine engine;
+
+        ResDemandProvider::run(demandTmp, '', '', _itemId, dateNull(), dateNull());
+
+        demandLine.setTmpData(demandTmp);
+        while select demandLine
+        {
+            recIds += demandLine.RecId;
+        }
+
+        engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, recIds);
+
+        return engine;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>supplyForItem</Name>
+				<Source><![CDATA[
+    private ResSupplyLineTmp supplyForItem(InventTable _item, InventLocation _warehouse)
+    {
+        ResSupplyLineTmp supplyTmp;
+
+        ResSupplyProvider::run(supplyTmp, [_item.ItemId], '', _warehouse.InventLocationId);
+
+        return supplyTmp;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>fefoConsumesEarliestExpiryBatchFirst</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void fefoConsumesEarliestExpiryBatchFirst()
+    {
+        const ItemId    itemId      = 'RAM01';
+        InventTable     item        = Res_TestDataBuilder::batchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        var earlyBatch = Res_TestDataBuilder::createBatch(item, today + 5);
+        var lateBatch  = Res_TestDataBuilder::createBatch(item, today + 60);
+
+        Res_TestDataBuilder::setAllocationRule(itemId, ResAllocationMethod::FEFO, 0, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RAM01CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, earlyBatch], 10);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, lateBatch], 10);
+
+        Res_TestDataBuilder::salesLine(item, 'RAM01CU', warehouse, 10, today + 10);
+
+        this.reserveWholeDemand(itemId);
+
+        ResSupplyLineTmp supplyTmp = this.supplyForItem(item, warehouse);
+        ResSupplyLineTmp early, late;
+        early.setTmpData(supplyTmp);
+        late.setTmpData(supplyTmp);
+
+        select firstonly early where early.BatchId == earlyBatch.inventBatchId;
+        select firstonly late  where late.BatchId  == lateBatch.inventBatchId;
+
+        this.assertTrue(early.QtyReserved == 10, 'FEFO should consume the earliest-expiry batch first.');
+        this.assertTrue(late.QtyReserved == 0, 'The later-expiry batch should not be touched while the earlier one still covers demand.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>fifoConsumesEarliestAvailableSupplyFirst</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Uses two Purchase order receipts (distinct, meaningful
+    /// <c>AvailableDate</c> values) rather than two on-hand rows, because
+    /// <c>ResSupplyProvider.insertOnHand</c> stamps every on-hand row with
+    /// <c>DateTimeUtil::date(DateTimeUtil::utcNow())</c> regardless of when
+    /// that stock actually arrived -- see the note in
+    /// <see cref="onHandFifoOrderingIsNotMeaningful"/> for why FIFO among
+    /// on-hand batches specifically cannot be asserted.
+    /// </summary>
+    [SysTestMethod]
+    public void fifoConsumesEarliestAvailableSupplyFirst()
+    {
+        const ItemId    itemId      = 'RAM02';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setAllocationRule(itemId, ResAllocationMethod::FIFO, 0, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RAM02CU', NoYes::No, NoYes::No);
+
+        var earlyPo = Res_TestDataBuilder::openPurchLine(item, warehouse, 10, today + 2);
+        var latePo  = Res_TestDataBuilder::openPurchLine(item, warehouse, 10, today + 20);
+
+        Res_TestDataBuilder::salesLine(item, 'RAM02CU', warehouse, 10, today + 25);
+
+        this.reserveWholeDemand(itemId);
+
+        ResHistoryLog log;
+        select firstonly log where log.Action == ResAction::Reserve && log.RuleApplied like ('*' + earlyPo.PurchId + '*');
+        this.assertTrue(log.RecId != 0, 'FIFO should consume the earlier-delivery-date purchase line first.');
+
+        select firstonly log where log.Action == ResAction::Reserve && log.RuleApplied like ('*' + latePo.PurchId + '*');
+        this.assertTrue(log.RecId == 0, 'The later-delivery-date purchase line should not have been touched.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>onHandFifoOrderingIsNotMeaningful</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// KNOWN MISMATCH: <c>ResSupplyProvider.insertOnHand</c> sets every
+    /// on-hand supply row's <c>AvailableDate</c> to "today", unconditionally.
+    /// For a FIFO-configured item whose only supply is two on-hand batches,
+    /// this means the FDD's "earliest-receipt supply is consumed first"
+    /// guarantee cannot actually be honored for on-hand stock: both rows tie
+    /// on <c>AvailableDate</c> and the order both come back in is whatever
+    /// the underlying `order by AvailableDate asc` query happens to return
+    /// for equal keys -- not true receipt order. This test only documents
+    /// the ambiguity (both batches get *some* allocation); it does not (and
+    /// cannot) assert which one is consumed first.
+    /// </summary>
+    [SysTestMethod]
+    public void onHandFifoOrderingIsNotMeaningful()
+    {
+        const ItemId    itemId      = 'RAM03';
+        InventTable     item        = Res_TestDataBuilder::batchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        var batchA = Res_TestDataBuilder::createBatch(item, dateNull());
+        var batchB = Res_TestDataBuilder::createBatch(item, dateNull());
+
+        Res_TestDataBuilder::setAllocationRule(itemId, ResAllocationMethod::FIFO, 0, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RAM03CU', NoYes::Yes, NoYes::Yes);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, batchA], 5);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, batchB], 5);
+
+        Res_TestDataBuilder::salesLine(item, 'RAM03CU', warehouse, 10, today + 10);
+
+        var engine = this.reserveWholeDemand(itemId);
+
+        this.assertTrue(engine.parmLinesFullyReserved() == 1,
+            'Both batches together cover demand, so the line should still fully reserve -- ' +
+            'this test does not (and, given the AvailableDate bug, cannot) verify *which* batch went first.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>nearExpiryBlockDaysExcludesBatch</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void nearExpiryBlockDaysExcludesBatch()
+    {
+        const ItemId    itemId      = 'RAM04';
+        InventTable     item        = Res_TestDataBuilder::batchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        var nearExpiryBatch = Res_TestDataBuilder::createBatch(item, today + 10); // inside the 30-day block window
+        var safeBatch       = Res_TestDataBuilder::createBatch(item, today + 90);
+
+        Res_TestDataBuilder::setAllocationRule(itemId, ResAllocationMethod::FEFO, 30, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RAM04CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, nearExpiryBatch], 10);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, safeBatch], 10);
+
+        Res_TestDataBuilder::salesLine(item, 'RAM04CU', warehouse, 10, today + 15);
+
+        this.reserveWholeDemand(itemId);
+
+        ResSupplyLineTmp supplyTmp = this.supplyForItem(item, warehouse);
+        ResSupplyLineTmp nearExpiry, safe;
+        nearExpiry.setTmpData(supplyTmp);
+        safe.setTmpData(supplyTmp);
+
+        select firstonly nearExpiry where nearExpiry.BatchId == nearExpiryBatch.inventBatchId;
+        select firstonly safe       where safe.BatchId       == safeBatch.inventBatchId;
+
+        this.assertTrue(nearExpiry.QtyReserved == 0, 'A batch inside NearExpiryBlockDays must never be auto-allocated.');
+        this.assertTrue(safe.QtyReserved == 10, 'Demand should instead be covered by the batch outside the block window.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>quarantinedBatchExcludedWhenNotAllowed</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Depends on this environment's quarantine <c>WHSInventStatusId</c>
+    /// matching the literal 'Quarantine' hardcoded in
+    /// <c>ResReservationEngine</c>'s <c>#QuarantineStatusId</c> macro -- see
+    /// <see cref="Res_TestDataBuilder.quarantineStatusId"/>.
+    /// </summary>
+    [SysTestMethod]
+    public void quarantinedBatchExcludedWhenNotAllowed()
+    {
+        const ItemId    itemId      = 'RAM05';
+        InventTable     item        = Res_TestDataBuilder::batchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        var quarantinedBatch = Res_TestDataBuilder::createBatch(item, today + 30);
+        var approvedBatch    = Res_TestDataBuilder::createBatch(item, today + 60);
+        WHSInventStatusId quarantineStatus = Res_TestDataBuilder::quarantineStatusId();
+
+        Res_TestDataBuilder::setAllocationRule(itemId, ResAllocationMethod::FEFO, 0, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RAM05CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHandAtStatus(item, warehouse, quarantinedBatch.inventBatchId, quarantineStatus, 50);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, approvedBatch], 10);
+
+        Res_TestDataBuilder::salesLine(item, 'RAM05CU', warehouse, 10, today + 15);
+
+        this.reserveWholeDemand(itemId);
+
+        ResSupplyLineTmp supplyTmp = this.supplyForItem(item, warehouse);
+        ResSupplyLineTmp quarantined, approved;
+        quarantined.setTmpData(supplyTmp);
+        approved.setTmpData(supplyTmp);
+
+        select firstonly quarantined where quarantined.BatchId == quarantinedBatch.inventBatchId;
+        select firstonly approved    where approved.BatchId    == approvedBatch.inventBatchId;
+
+        this.assertTrue(quarantined.QtyReserved == 0, 'Quarantined batch must never be allocated when AllowQuarantined = No, even though it has far more available qty.');
+        this.assertTrue(approved.QtyReserved == 10, 'Demand should be covered entirely by the approved batch instead.');
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

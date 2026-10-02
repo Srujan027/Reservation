@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEdt xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns=""
+	i:type="AxEdtString">
+	<Name>ResReasonCodeId</Name>
+	<Label>@ResReservation:ResReasonCodeId</Label>
+	<StringSize>10</StringSize>
+	<ArrayElements />
+	<Relations />
+	<TableReferences />
+</AxEdt>

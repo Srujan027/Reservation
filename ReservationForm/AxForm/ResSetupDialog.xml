@@ -1,0 +1,878 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxForm xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="Microsoft.Dynamics.AX.Metadata.V6">
+	<Name>ResSetupDialog</Name>
+	<SourceCode>
+		<Methods xmlns="">
+			<Method>
+				<Name>classDeclaration</Name>
+				<Source><![CDATA[
+/// <summary>
+/// Setup dialog per FDD section 6.5 (Figure 2): five maintainable tabs bound
+/// directly to the setup tables. Each grid row is saved through its own
+/// datasource transaction as usual; there is no dialog-wide transaction, since
+/// holding a ttsbegin open across an interactive modal session causes the
+/// kernel to reject the unbalanced TTS as soon as the dialog is closed by any
+/// path other than the Save/Cancel buttons (X button, Esc, a mid-edit error).
+/// </summary>
+[Form]
+public class ResSetupDialog extends FormRun
+{
+}
+]]></Source>
+			</Method>
+		</Methods>
+		<DataSources xmlns="">
+			<DataSource>
+				<Name>ResDeliveryPolicy</Name>
+				<Methods>
+					<Method>
+						<Name>active</Name>
+						<Source><![CDATA[
+        public int active()
+        {
+            int ret = super();
+
+            // Minimum Fill Percentage only means anything once partial
+            // delivery is allowed at all -- keep it locked otherwise so it
+            // cannot be edited into a value the engine would never consult.
+            DeliveryPolicyGrid_MinFillPercentage.enabled(ResDeliveryPolicy.AllowPartialDelivery == NoYes::Yes);
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+				<Fields />
+			</DataSource>
+			<DataSource>
+				<Name>ResOrderTypePolicy</Name>
+				<Methods>
+					<Method>
+						<Name>active</Name>
+						<Source><![CDATA[
+        public int active()
+        {
+            int ret = super();
+
+            // Same reasoning as ResDeliveryPolicy.active() -- lock the
+            // transfer minimum fill field whenever transfer partial
+            // delivery is not allowed.
+            OrderTypePolicyGroup_TransferMinFillPercentage.enabled(ResOrderTypePolicy.TransferAllowPartial == NoYes::Yes);
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+				<Fields />
+			</DataSource>
+		</DataSources>
+		<DataControls xmlns="">
+			<Control>
+				<Name>PriorityRulesNewButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            ResPriorityRule_ds.create();
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>PriorityRulesDeleteButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            if (ResPriorityRule_ds.cursor().RecId
+                && Box::yesNo("@ResReservation:ResSetupDialog_ConfirmDelete", DialogButton::No) == DialogButton::Yes)
+            {
+                ResPriorityRule_ds.delete();
+            }
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>AllocationRulesNewButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            ResAllocationRule_ds.create();
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>AllocationRulesDeleteButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            if (ResAllocationRule_ds.cursor().RecId
+                && Box::yesNo("@ResReservation:ResSetupDialog_ConfirmDelete", DialogButton::No) == DialogButton::Yes)
+            {
+                ResAllocationRule_ds.delete();
+            }
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>DeliveryPolicyNewButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            ResDeliveryPolicy_ds.create();
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>DeliveryPolicyDeleteButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            if (ResDeliveryPolicy_ds.cursor().RecId
+                && Box::yesNo("@ResReservation:ResSetupDialog_ConfirmDelete", DialogButton::No) == DialogButton::Yes)
+            {
+                ResDeliveryPolicy_ds.delete();
+            }
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>DeliveryPolicyGrid_AllowPartialDelivery</Name>
+				<Type>ComboBox</Type>
+				<Methods>
+					<Method>
+						<Name>modified</Name>
+						<Source><![CDATA[
+        public boolean modified()
+        {
+            boolean ret = super();
+
+            DeliveryPolicyGrid_MinFillPercentage.enabled(ResDeliveryPolicy.AllowPartialDelivery == NoYes::Yes);
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>ReasonCodesNewButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            ResReasonCode_ds.create();
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>ReasonCodesDeleteButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            if (ResReasonCode_ds.cursor().RecId
+                && Box::yesNo("@ResReservation:ResSetupDialog_ConfirmDelete", DialogButton::No) == DialogButton::Yes)
+            {
+                ResReasonCode_ds.delete();
+            }
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>OrderTypePolicyGroup_TransferAllowPartial</Name>
+				<Type>ComboBox</Type>
+				<Methods>
+					<Method>
+						<Name>modified</Name>
+						<Source><![CDATA[
+        public boolean modified()
+        {
+            boolean ret = super();
+
+            OrderTypePolicyGroup_TransferMinFillPercentage.enabled(ResOrderTypePolicy.TransferAllowPartial == NoYes::Yes);
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>SaveButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            element.closeOk();
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>CancelButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            element.closeCancel();
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+		</DataControls>
+		<Members xmlns="" />
+	</SourceCode>
+	<DataSources>
+		<AxFormDataSource xmlns="">
+			<Name>ResPriorityRule</Name>
+			<Table>ResPriorityRule</Table>
+			<Fields />
+			<ReferencedDataSources />
+			<DataSourceLinks />
+			<DerivedDataSources />
+		</AxFormDataSource>
+		<AxFormDataSource xmlns="">
+			<Name>ResAllocationRule</Name>
+			<Table>ResAllocationRule</Table>
+			<Fields />
+			<ReferencedDataSources />
+			<DataSourceLinks />
+			<DerivedDataSources />
+		</AxFormDataSource>
+		<AxFormDataSource xmlns="">
+			<Name>ResDeliveryPolicy</Name>
+			<Table>ResDeliveryPolicy</Table>
+			<Fields />
+			<ReferencedDataSources />
+			<DataSourceLinks />
+			<DerivedDataSources />
+		</AxFormDataSource>
+		<AxFormDataSource xmlns="">
+			<Name>ResOrderTypePolicy</Name>
+			<Table>ResOrderTypePolicy</Table>
+			<Fields />
+			<ReferencedDataSources />
+			<DataSourceLinks />
+			<DerivedDataSources />
+		</AxFormDataSource>
+		<AxFormDataSource xmlns="">
+			<Name>ResReasonCode</Name>
+			<Table>ResReasonCode</Table>
+			<Fields />
+			<ReferencedDataSources />
+			<DataSourceLinks />
+			<DerivedDataSources />
+		</AxFormDataSource>
+		<AxFormDataSource xmlns="">
+			<Name>ResRiskThreshold</Name>
+			<Table>ResRiskThreshold</Table>
+			<Fields />
+			<ReferencedDataSources />
+			<DataSourceLinks />
+			<DerivedDataSources />
+		</AxFormDataSource>
+	</DataSources>
+	<Design>
+		<Caption xmlns="">@ResReservation:ResSetupDialog</Caption>
+		<Pattern xmlns="">Custom</Pattern>
+		<ShowDeleteButton xmlns="">No</ShowDeleteButton>
+		<ShowNewButton xmlns="">No</ShowNewButton>
+		<Controls xmlns="">
+			<AxFormControl xmlns=""
+				i:type="AxFormTabControl">
+				<Name>SetupTabs</Name>
+				<Type>Tab</Type>
+				<FormControlExtension
+					i:nil="true" />
+				<Controls>
+					<AxFormControl xmlns=""
+						i:type="AxFormTabPageControl">
+						<Name>PriorityRulesTab</Name>
+						<Pattern>Custom</Pattern>
+						<Type>TabPage</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormGroupControl">
+								<Name>PriorityRulesButtonGroup</Name>
+								<Type>Group</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormButtonControl">
+										<Name>PriorityRulesNewButton</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>Button</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<Text>@ResReservation:ResSetupDialog_New</Text>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormButtonControl">
+										<Name>PriorityRulesDeleteButton</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>Button</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<Text>@ResReservation:ResSetupDialog_Delete</Text>
+									</AxFormControl>
+								</Controls>
+								<ArrangeMethod>HorizontalLeft</ArrangeMethod>
+							</AxFormControl>
+							<AxFormControl xmlns=""
+								i:type="AxFormGridControl">
+								<Name>PriorityRulesGrid</Name>
+								<Type>Grid</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>PriorityRulesGrid_CustAccount</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>CustAccount</DataField>
+										<DataSource>ResPriorityRule</DataSource>
+										<Label>@ResReservation:ResPriorityRule_CustAccount</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>PriorityRulesGrid_CustGroup</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>CustGroup</DataField>
+										<DataSource>ResPriorityRule</DataSource>
+										<Label>@ResReservation:ResPriorityRule_CustGroup</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormIntegerControl">
+										<Name>PriorityRulesGrid_PriorityTier</Name>
+										<Type>Integer</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>PriorityTier</DataField>
+										<DataSource>ResPriorityRule</DataSource>
+										<Label>@ResReservation:ResPriorityTier</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormDateControl">
+										<Name>PriorityRulesGrid_EffectiveFrom</Name>
+										<Type>Date</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>EffectiveFrom</DataField>
+										<DataSource>ResPriorityRule</DataSource>
+										<Label>@ResReservation:ResPriorityRule_EffectiveFrom</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormDateControl">
+										<Name>PriorityRulesGrid_EffectiveTo</Name>
+										<Type>Date</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>EffectiveTo</DataField>
+										<DataSource>ResPriorityRule</DataSource>
+										<Label>@ResReservation:ResPriorityRule_EffectiveTo</Label>
+									</AxFormControl>
+								</Controls>
+								<DataSource>ResPriorityRule</DataSource>
+							</AxFormControl>
+						</Controls>
+						<Caption>@ResReservation:ResSetupDialog_PriorityRulesTab</Caption>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormTabPageControl">
+						<Name>AllocationRulesTab</Name>
+						<Pattern>Custom</Pattern>
+						<Type>TabPage</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormGroupControl">
+								<Name>AllocationRulesButtonGroup</Name>
+								<Type>Group</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormButtonControl">
+										<Name>AllocationRulesNewButton</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>Button</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<Text>@ResReservation:ResSetupDialog_New</Text>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormButtonControl">
+										<Name>AllocationRulesDeleteButton</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>Button</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<Text>@ResReservation:ResSetupDialog_Delete</Text>
+									</AxFormControl>
+								</Controls>
+								<ArrangeMethod>HorizontalLeft</ArrangeMethod>
+							</AxFormControl>
+							<AxFormControl xmlns=""
+								i:type="AxFormGridControl">
+								<Name>AllocationRulesGrid</Name>
+								<Type>Grid</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>AllocationRulesGrid_ItemId</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>ItemId</DataField>
+										<DataSource>ResAllocationRule</DataSource>
+										<Label>@ResReservation:ResAllocationRule_ItemId</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>AllocationRulesGrid_ItemGroupId</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>ItemGroupId</DataField>
+										<DataSource>ResAllocationRule</DataSource>
+										<Label>@ResReservation:ResAllocationRule_ItemGroupId</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormComboBoxControl">
+										<Name>AllocationRulesGrid_AllocationMethod</Name>
+										<Type>ComboBox</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>AllocationMethod</DataField>
+										<DataSource>ResAllocationRule</DataSource>
+										<Label>@ResReservation:ResAllocationMethod</Label>
+										<Items />
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormIntegerControl">
+										<Name>AllocationRulesGrid_NearExpiryBlockDays</Name>
+										<Type>Integer</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>NearExpiryBlockDays</DataField>
+										<DataSource>ResAllocationRule</DataSource>
+										<Label>@ResReservation:ResAllocationRule_NearExpiryBlockDays</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormComboBoxControl">
+										<Name>AllocationRulesGrid_AllowQuarantined</Name>
+										<Type>ComboBox</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>AllowQuarantined</DataField>
+										<DataSource>ResAllocationRule</DataSource>
+										<Label>@ResReservation:ResAllocationRule_AllowQuarantined</Label>
+										<Items />
+									</AxFormControl>
+								</Controls>
+								<DataSource>ResAllocationRule</DataSource>
+							</AxFormControl>
+						</Controls>
+						<Caption>@ResReservation:ResSetupDialog_AllocationRulesTab</Caption>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormTabPageControl">
+						<Name>DeliveryPolicyTab</Name>
+						<Pattern>Custom</Pattern>
+						<Type>TabPage</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormGroupControl">
+								<Name>DeliveryPolicyButtonGroup</Name>
+								<Type>Group</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormButtonControl">
+										<Name>DeliveryPolicyNewButton</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>Button</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<Text>@ResReservation:ResSetupDialog_New</Text>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormButtonControl">
+										<Name>DeliveryPolicyDeleteButton</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>Button</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<Text>@ResReservation:ResSetupDialog_Delete</Text>
+									</AxFormControl>
+								</Controls>
+								<ArrangeMethod>HorizontalLeft</ArrangeMethod>
+							</AxFormControl>
+							<AxFormControl xmlns=""
+								i:type="AxFormGridControl">
+								<Name>DeliveryPolicyGrid</Name>
+								<Type>Grid</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>DeliveryPolicyGrid_CustAccount</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>CustAccount</DataField>
+										<DataSource>ResDeliveryPolicy</DataSource>
+										<Label>@ResReservation:ResDeliveryPolicy_CustAccount</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>DeliveryPolicyGrid_CustGroup</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>CustGroup</DataField>
+										<DataSource>ResDeliveryPolicy</DataSource>
+										<Label>@ResReservation:ResDeliveryPolicy_CustGroup</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormComboBoxControl">
+										<Name>DeliveryPolicyGrid_AllowPartialDelivery</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>ComboBox</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>AllowPartialDelivery</DataField>
+										<DataSource>ResDeliveryPolicy</DataSource>
+										<Label>@ResReservation:ResDeliveryPolicy_AllowPartialDelivery</Label>
+										<Items />
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormComboBoxControl">
+										<Name>DeliveryPolicyGrid_AllowMixedBatch</Name>
+										<Type>ComboBox</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>AllowMixedBatch</DataField>
+										<DataSource>ResDeliveryPolicy</DataSource>
+										<Label>@ResReservation:ResDeliveryPolicy_AllowMixedBatch</Label>
+										<Items />
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormRealControl">
+										<Name>DeliveryPolicyGrid_MinFillPercentage</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>Real</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>MinFillPercentage</DataField>
+										<DataSource>ResDeliveryPolicy</DataSource>
+										<Label>@ResReservation:ResDeliveryPolicy_MinFillPercentage</Label>
+									</AxFormControl>
+								</Controls>
+								<DataSource>ResDeliveryPolicy</DataSource>
+							</AxFormControl>
+						</Controls>
+						<Caption>@ResReservation:ResSetupDialog_DeliveryPolicyTab</Caption>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormTabPageControl">
+						<Name>ReasonCodesTab</Name>
+						<Pattern>Custom</Pattern>
+						<Type>TabPage</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormGroupControl">
+								<Name>ReasonCodesButtonGroup</Name>
+								<Type>Group</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormButtonControl">
+										<Name>ReasonCodesNewButton</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>Button</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<Text>@ResReservation:ResSetupDialog_New</Text>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormButtonControl">
+										<Name>ReasonCodesDeleteButton</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>Button</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<Text>@ResReservation:ResSetupDialog_Delete</Text>
+									</AxFormControl>
+								</Controls>
+								<ArrangeMethod>HorizontalLeft</ArrangeMethod>
+							</AxFormControl>
+							<AxFormControl xmlns=""
+								i:type="AxFormGridControl">
+								<Name>ReasonCodesGrid</Name>
+								<Type>Grid</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>ReasonCodesGrid_ReasonCode</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>ReasonCode</DataField>
+										<DataSource>ResReasonCode</DataSource>
+										<Label>@ResReservation:ResReasonCodeId</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>ReasonCodesGrid_Description</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>Description</DataField>
+										<DataSource>ResReasonCode</DataSource>
+									</AxFormControl>
+								</Controls>
+								<DataSource>ResReasonCode</DataSource>
+							</AxFormControl>
+						</Controls>
+						<Caption>@ResReservation:ResSetupDialog_ReasonCodesTab</Caption>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormTabPageControl">
+						<Name>GeneralSettingsTab</Name>
+						<Pattern>Custom</Pattern>
+						<Type>TabPage</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormGroupControl">
+								<Name>OrderTypePolicyGroup</Name>
+								<Type>Group</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormComboBoxControl">
+										<Name>OrderTypePolicyGroup_SalesAlwaysOutranksTransfer</Name>
+										<Type>ComboBox</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>SalesAlwaysOutranksTransfer</DataField>
+										<DataSource>ResOrderTypePolicy</DataSource>
+										<Label>@ResReservation:ResOrderTypePolicy_SalesAlwaysOutranksTransfer</Label>
+										<Items />
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormComboBoxControl">
+										<Name>OrderTypePolicyGroup_TransferAllowPartial</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>ComboBox</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>TransferAllowPartial</DataField>
+										<DataSource>ResOrderTypePolicy</DataSource>
+										<Label>@ResReservation:ResOrderTypePolicy_TransferAllowPartial</Label>
+										<Items />
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormComboBoxControl">
+										<Name>OrderTypePolicyGroup_TransferAllowMixedBatch</Name>
+										<Type>ComboBox</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>TransferAllowMixedBatch</DataField>
+										<DataSource>ResOrderTypePolicy</DataSource>
+										<Label>@ResReservation:ResOrderTypePolicy_TransferAllowMixedBatch</Label>
+										<Items />
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormRealControl">
+										<Name>OrderTypePolicyGroup_TransferMinFillPercentage</Name>
+										<AutoDeclaration>Yes</AutoDeclaration>
+										<Type>Real</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>TransferMinFillPercentage</DataField>
+										<DataSource>ResOrderTypePolicy</DataSource>
+										<Label>@ResReservation:ResOrderTypePolicy_TransferMinFillPercentage</Label>
+									</AxFormControl>
+								</Controls>
+								<Caption>@ResReservation:ResSetupDialog_OrderTypePriorityTab</Caption>
+								<DataSource>ResOrderTypePolicy</DataSource>
+							</AxFormControl>
+							<AxFormControl xmlns=""
+								i:type="AxFormGroupControl">
+								<Name>RiskThresholdGroup</Name>
+								<Type>Group</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormIntegerControl">
+										<Name>RiskThresholdGroup_YellowThresholdDays</Name>
+										<Type>Integer</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>YellowThresholdDays</DataField>
+										<DataSource>ResRiskThreshold</DataSource>
+										<Label>@ResReservation:ResRiskThreshold_YellowThresholdDays</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormIntegerControl">
+										<Name>RiskThresholdGroup_RedThresholdDays</Name>
+										<Type>Integer</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>RedThresholdDays</DataField>
+										<DataSource>ResRiskThreshold</DataSource>
+										<Label>@ResReservation:ResRiskThreshold_RedThresholdDays</Label>
+									</AxFormControl>
+								</Controls>
+								<ArrangeMethod>HorizontalLeft</ArrangeMethod>
+								<Caption>@ResReservation:ResSetupDialog_RiskThresholdGroup</Caption>
+								<DataSource>ResRiskThreshold</DataSource>
+							</AxFormControl>
+						</Controls>
+						<Caption>@ResReservation:ResSetupDialog_GeneralSettingsTab</Caption>
+					</AxFormControl>
+				</Controls>
+			</AxFormControl>
+			<AxFormControl xmlns=""
+				i:type="AxFormGroupControl">
+				<Name>ButtonGroup</Name>
+				<Type>Group</Type>
+				<FormControlExtension
+					i:nil="true" />
+				<Controls>
+					<AxFormControl xmlns=""
+						i:type="AxFormButtonControl">
+						<Name>SaveButton</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>Button</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Text>@ResReservation:ResSetupDialog_Save</Text>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormButtonControl">
+						<Name>CancelButton</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>Button</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Text>@ResReservation:ResUnreserveReasonDialog_Cancel</Text>
+					</AxFormControl>
+				</Controls>
+				<ArrangeMethod>HorizontalRight</ArrangeMethod>
+			</AxFormControl>
+		</Controls>
+	</Design>
+	<Parts />
+</AxForm>

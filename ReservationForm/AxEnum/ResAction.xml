@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEnum xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResAction</Name>
+	<UseEnumValue>No</UseEnumValue>
+	<EnumValues>
+		<AxEnumValue>
+			<Name>Reserve</Name>
+			<Label>@ResReservation:ResAction_Reserve</Label>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Unreserve</Name>
+			<Label>@ResReservation:ResAction_Unreserve</Label>
+			<Value>1</Value>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Skip</Name>
+			<Label>@ResReservation:ResAction_Skip</Label>
+			<Value>2</Value>
+		</AxEnumValue>
+	</EnumValues>
+	<Label>@ResReservation:ResAction</Label>
+	<IsExtensible>true</IsExtensible>
+</AxEnum>

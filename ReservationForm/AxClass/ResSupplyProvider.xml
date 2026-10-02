@@ -1,0 +1,444 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResSupplyProvider</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// Builds the Supplies grid data: on-hand (<c>InventSum</c>), open Purchase order
+/// receipts (<c>PurchLine</c>), open Production order receipts (<c>ProdTable</c>)
+/// and in-transit Transfer order lines (<c>InventTransferLine</c>, shipped status),
+/// scoped to the item/site/warehouse of the currently selected Demand line(s), per
+/// FDD section 6.2.
+/// </summary>
+/// <remarks>
+/// Quality approval is exposed via <c>isQualityApproved</c> as a single, overridable
+/// seam. Out of the box it treats everything as approved; wire it to your Quality
+/// Management (InventQualityOrder) setup if that module is enabled in this
+/// environment.
+/// </remarks>
+public class ResSupplyProvider
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>run</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Repopulates <paramref name="_supplyLineTmp"/> for the given set of item ids
+    /// (typically the distinct items among the selected Demand rows), narrowed to
+    /// the site/warehouse the user filtered on.
+    /// </summary>
+    public static void run(
+        ResSupplyLineTmp    _supplyLineTmp,
+        container           _itemIds,
+        InventSiteId        _siteId,
+        InventLocationId    _warehouseId)
+    {
+        int idx;
+
+        delete_from _supplyLineTmp;
+
+        for (idx = 1; idx <= conLen(_itemIds); idx++)
+        {
+            ItemId itemId = conPeek(_itemIds, idx);
+
+            ResSupplyProvider::insertOnHand(_supplyLineTmp, itemId, _siteId, _warehouseId);
+            ResSupplyProvider::insertPurchLines(_supplyLineTmp, itemId, _siteId, _warehouseId);
+            ResSupplyProvider::insertProdReceipts(_supplyLineTmp, itemId, _siteId, _warehouseId);
+            ResSupplyProvider::insertTransferInTransit(_supplyLineTmp, itemId, _siteId, _warehouseId);
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>runForSelectedDemand</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Repopulates <paramref name="_supplyLineTmp"/> scoped to the EXACT
+    /// item/site/warehouse of each selected Demand row -- not the screen's
+    /// Site/Warehouse filter fields, which (when blank) impose no restriction
+    /// and were letting supply from unrelated sites/warehouses show up even
+    /// though Reserve can never actually use it: <c>ResReservationEngine.
+    /// eligibleSupplyRecIds()</c> always filters supply down to the demand
+    /// line's own <c>InventSiteId</c>/<c>InventLocationId</c>, so showing
+    /// anything broader here just misleads the user into thinking supply is
+    /// usable when it isn't. This is what <see cref="run"/>'s own class-level
+    /// doc comment already promised ("scoped to the item/site/warehouse of the
+    /// currently selected Demand line(s)") but never actually did.
+    /// </summary>
+    /// <remarks>
+    /// A distinct (item, site, warehouse) triple is queried at most once, even
+    /// if several selected Demand rows share it -- e.g. two Sales lines for the
+    /// same item from the same warehouse.
+    /// </remarks>
+    public static void runForSelectedDemand(
+        ResSupplyLineTmp    _supplyLineTmp,
+        ResDemandLineTmp    _demandLineTmp,
+        container           _selectedRecIds)
+    {
+        ResDemandLineTmp    demandLine;
+        Set                 seenScopes = new Set(Types::String);
+        int                 i;
+
+        delete_from _supplyLineTmp;
+
+        demandLine.setTmpData(_demandLineTmp);
+
+        for (i = 1; i <= conLen(_selectedRecIds); i++)
+        {
+            str scopeKey;
+
+            select firstonly demandLine
+                where demandLine.RecId == conPeek(_selectedRecIds, i);
+
+            if (!demandLine.RecId)
+            {
+                continue;
+            }
+
+            scopeKey = strFmt('%1|%2|%3', demandLine.ItemId, demandLine.InventSiteId, demandLine.InventLocationId);
+
+            if (seenScopes.in(scopeKey))
+            {
+                continue;
+            }
+
+            seenScopes.add(scopeKey);
+
+            ResSupplyProvider::insertOnHand(_supplyLineTmp, demandLine.ItemId, demandLine.InventSiteId, demandLine.InventLocationId);
+            ResSupplyProvider::insertPurchLines(_supplyLineTmp, demandLine.ItemId, demandLine.InventSiteId, demandLine.InventLocationId);
+            ResSupplyProvider::insertProdReceipts(_supplyLineTmp, demandLine.ItemId, demandLine.InventSiteId, demandLine.InventLocationId);
+            ResSupplyProvider::insertTransferInTransit(_supplyLineTmp, demandLine.ItemId, demandLine.InventSiteId, demandLine.InventLocationId);
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>isQualityApproved</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Single extension seam for Quality Management integration. Defaults to
+    /// approved; override or extend if InventQualityOrder is in use.
+    /// </summary>
+    protected static NoYes isQualityApproved(ItemId _itemId, InventDimId _inventDimId)
+    {
+        return NoYes::Yes;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>onHandAvailableSince</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Approximates when the on-hand quantity at this exact dimension became
+    /// available, so FIFO allocation can actually order two on-hand rows by
+    /// receipt -- without this, every on-hand row read "today" and FIFO could
+    /// never tell them apart. Uses the earliest recorded receipt transaction
+    /// for the dimension as the proxy; falls back to today if none is found
+    /// (e.g. an opening-balance dimension with no InventTrans history).
+    /// </summary>
+    private static TransDate onHandAvailableSince(ItemId _itemId, InventDimId _inventDimId)
+    {
+        InventTrans earliestReceipt;
+
+        select minof(DatePhysical) from earliestReceipt
+            where earliestReceipt.ItemId        == _itemId
+            &&    earliestReceipt.InventDimId   == _inventDimId
+            &&    earliestReceipt.Qty           > 0
+            &&    earliestReceipt.StatusReceipt != StatusReceipt::None;
+
+        return earliestReceipt.DatePhysical ? earliestReceipt.DatePhysical : DateTimeUtil::date(DateTimeUtil::utcNow());
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>insertOnHand</Name>
+				<Source><![CDATA[
+    private static void insertOnHand(
+        ResSupplyLineTmp    _supplyLineTmp,
+        ItemId              _itemId,
+        InventSiteId        _siteId,
+        InventLocationId    _warehouseId)
+    {
+        InventSum   inventSum;
+        InventDim   inventDim;
+        InventBatch inventBatch;
+
+        while select inventSum
+            join inventDim
+            where inventDim.InventDimId    == inventSum.InventDimId
+            &&    inventSum.ItemId         == _itemId
+            &&    inventSum.AvailPhysical  != 0
+            &&   (!_siteId       || inventDim.InventSiteId     == _siteId)
+            &&   (!_warehouseId  || inventDim.InventLocationId == _warehouseId)
+        {
+            inventBatch = InventBatch::find(inventDim.inventBatchId, _itemId);
+
+            _supplyLineTmp.clear();
+            _supplyLineTmp.SupplyType       = ResSupplyType::OnHand;
+            _supplyLineTmp.SourceId         = '';
+            _supplyLineTmp.ItemId           = _itemId;
+            _supplyLineTmp.InventSiteId     = inventDim.InventSiteId;
+            _supplyLineTmp.InventLocationId = inventDim.InventLocationId;
+            _supplyLineTmp.InventDimId      = inventDim.InventDimId;
+            _supplyLineTmp.BatchId          = inventDim.inventBatchId;
+            _supplyLineTmp.ExpirationDate   = inventBatch.expDate;
+            _supplyLineTmp.AvailableDate    = ResSupplyProvider::onHandAvailableSince(_itemId, inventDim.InventDimId);
+            // QtyAvailable is the raw physical on-hand quantity at this dimension,
+            // unadjusted for any reservation -- mirrors QtyAvailable's meaning for
+            // the Purchase/Production/TransferInTransit rows below (their own raw
+            // RemainPurchPhysical/QtySched/QtyTransfer). AvailableForReservation is
+            // the actually-reservable remainder: AvailPhysical is already net of
+            // existing reservations (per its own help text: "Available physical =
+            // Physical inventory - Physical reserved"), so it is used there
+            // directly. QtyReserved on this temp table tracks a different thing
+            // entirely -- how much of THIS row the engine has already committed to
+            // an earlier demand line within the current Reserve click (reserveLine()
+            // increments it as it allocates). Seeding it from inventSum.ReservPhysical
+            // here would double-subtract existing reservations everywhere downstream
+            // (eligibleSupplyRecIds, availableForReservation()): e.g. 10000 on hand
+            // with 5000 already reserved -> AvailPhysical = 5000, then 5000 - 5000 = 0,
+            // making the genuinely-still-reservable 5000 look unavailable.
+            _supplyLineTmp.QtyAvailable             = inventSum.PhysicalInvent;
+            _supplyLineTmp.QtyReserved              = 0;
+            // Stored directly rather than left to the (non-cacheable-safe)
+            // availableForReservation() method -- see that method's remarks.
+            _supplyLineTmp.AvailableForReservation  = inventSum.AvailPhysical;
+            _supplyLineTmp.QualityStatusId          = inventDim.InventStatusId;
+            _supplyLineTmp.QualityApproved          = ResSupplyProvider::isQualityApproved(_itemId, inventDim.InventDimId);
+            _supplyLineTmp.RefTableId               = tableNum(InventSum);
+            _supplyLineTmp.RefRecId                 = inventSum.RecId;
+            _supplyLineTmp.insert();
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>alreadyConsumed</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// How much of one specific Purchase/Production/TransferInTransit record's
+    /// raw remaining receipt qty is already spoken for by a reservation our
+    /// own engine made against it. Without this, those rows read their raw
+    /// remaining receipt qty (<c>RemainPurchPhysical</c>/<c>QtySched</c>/
+    /// <c>QtyTransfer</c>) with no regard for reservations already made
+    /// against them, so a reservation against a not-yet-received supply row
+    /// would never show up as reduced availability on refresh, and a later
+    /// Reserve could draw against the same not-yet-received quantity a
+    /// second time.
+    /// </summary>
+    /// <remarks>
+    /// Delegates to <c>ResHistoryLog.consumedForSupplyRef</c> -- our own audit
+    /// trail, keyed by the supply record's own stable RecId -- rather than
+    /// inferring it from <c>InventTrans.InventDimId</c> or <c>InventSum.
+    /// AvailOrdered</c>. Both of those were tried and found unreliable for
+    /// ordered (not-yet-received) supply: the standard WHS reservation
+    /// hierarchy is not guaranteed to land an ordered reservation on the
+    /// exact dimension it was offered (it can resolve to a different concrete
+    /// batch/bin satisfying the same relaxed match criteria), which could both
+    /// miss the real reservation and misattribute it to an unrelated receipt
+    /// line sharing that dimension; and <c>InventSum.AvailOrdered</c> bundles
+    /// on-hand physical availability into the same figure (see
+    /// <c>InventOnHandQty.availOrdered()</c>: "physical + ordered + arrived -
+    /// reservOrdered") and may not even have a row yet for a dimension that
+    /// hasn't been through a real inventory posting.
+    /// </remarks>
+    private static Qty alreadyConsumed(RefTableId _refTableId, RefRecId _refRecId)
+    {
+        return ResHistoryLog::consumedForSupplyRef(_refTableId, _refRecId);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>insertPurchLines</Name>
+				<Source><![CDATA[
+    private static void insertPurchLines(
+        ResSupplyLineTmp    _supplyLineTmp,
+        ItemId              _itemId,
+        InventSiteId        _siteId,
+        InventLocationId    _warehouseId)
+    {
+        PurchLine   purchLine;
+        InventDim   inventDim;
+
+        while select purchLine
+            join inventDim
+            where inventDim.InventDimId         == purchLine.InventDimId
+            &&    purchLine.ItemId              == _itemId
+            &&    purchLine.RemainPurchPhysical > 0
+            &&   (!_siteId       || inventDim.InventSiteId     == _siteId)
+            &&   (!_warehouseId  || inventDim.InventLocationId == _warehouseId)
+        {
+            Qty availableQty = purchLine.RemainPurchPhysical - ResSupplyProvider::alreadyConsumed(tableNum(PurchLine), purchLine.RecId);
+
+            // Same convention as insertOnHand's AvailPhysical != 0 filter --
+            // once a receipt line's remaining qty is fully reserved, it's no
+            // longer real usable supply and shouldn't clutter the grid.
+            if (availableQty <= 0)
+            {
+                continue;
+            }
+
+            _supplyLineTmp.clear();
+            _supplyLineTmp.SupplyType       = ResSupplyType::Purchase;
+            _supplyLineTmp.SourceId         = purchLine.PurchId;
+            _supplyLineTmp.ItemId           = _itemId;
+            _supplyLineTmp.InventSiteId     = inventDim.InventSiteId;
+            _supplyLineTmp.InventLocationId = inventDim.InventLocationId;
+            _supplyLineTmp.InventDimId      = inventDim.InventDimId;
+            _supplyLineTmp.BatchId          = inventDim.inventBatchId;
+            _supplyLineTmp.AvailableDate            = purchLine.DeliveryDate;
+            // QtyAvailable is the raw remaining receipt qty; AvailableForReservation
+            // nets off whatever this module has already committed against this exact
+            // PurchLine (see alreadyConsumed()'s remarks above).
+            _supplyLineTmp.QtyAvailable              = purchLine.RemainPurchPhysical;
+            _supplyLineTmp.QtyReserved               = 0;
+            _supplyLineTmp.AvailableForReservation   = availableQty;
+            _supplyLineTmp.QualityStatusId           = inventDim.InventStatusId;
+            _supplyLineTmp.QualityApproved  = ResSupplyProvider::isQualityApproved(_itemId, inventDim.InventDimId);
+            _supplyLineTmp.RefTableId       = tableNum(PurchLine);
+            _supplyLineTmp.RefRecId         = purchLine.RecId;
+            _supplyLineTmp.insert();
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>insertProdReceipts</Name>
+				<Source><![CDATA[
+    private static void insertProdReceipts(
+        ResSupplyLineTmp    _supplyLineTmp,
+        ItemId              _itemId,
+        InventSiteId        _siteId,
+        InventLocationId    _warehouseId)
+    {
+        ProdTable   prodTable;
+        InventDim   inventDim;
+
+        while select prodTable
+            join inventDim
+            where inventDim.InventDimId    == prodTable.InventDimId
+            &&    prodTable.ItemId         == _itemId
+            &&    prodTable.ProdStatus     != ProdStatus::ReportedFinished
+            &&    prodTable.ProdStatus     != ProdStatus::Completed
+            &&    prodTable.QtySched       > 0
+            &&   (!_siteId       || inventDim.InventSiteId     == _siteId)
+            &&   (!_warehouseId  || inventDim.InventLocationId == _warehouseId)
+        {
+            Qty availableQty = prodTable.QtySched - ResSupplyProvider::alreadyConsumed(tableNum(ProdTable), prodTable.RecId);
+
+            // Same convention as insertOnHand's AvailPhysical != 0 filter --
+            // once a receipt line's remaining qty is fully reserved, it's no
+            // longer real usable supply and shouldn't clutter the grid.
+            if (availableQty <= 0)
+            {
+                continue;
+            }
+
+            _supplyLineTmp.clear();
+            _supplyLineTmp.SupplyType       = ResSupplyType::Production;
+            _supplyLineTmp.SourceId         = prodTable.ProdId;
+            _supplyLineTmp.ItemId           = _itemId;
+            _supplyLineTmp.InventSiteId     = inventDim.InventSiteId;
+            _supplyLineTmp.InventLocationId = inventDim.InventLocationId;
+            _supplyLineTmp.InventDimId      = inventDim.InventDimId;
+            _supplyLineTmp.BatchId          = inventDim.inventBatchId;
+            _supplyLineTmp.AvailableDate            = prodTable.SchedEnd;
+            // QtyAvailable is the raw scheduled qty; AvailableForReservation nets
+            // off whatever this module has already committed against this exact
+            // ProdTable (see alreadyConsumed()'s remarks above).
+            _supplyLineTmp.QtyAvailable              = prodTable.QtySched;
+            _supplyLineTmp.QtyReserved               = 0;
+            _supplyLineTmp.AvailableForReservation   = availableQty;
+            _supplyLineTmp.QualityStatusId           = inventDim.InventStatusId;
+            _supplyLineTmp.QualityApproved  = ResSupplyProvider::isQualityApproved(_itemId, inventDim.InventDimId);
+            _supplyLineTmp.RefTableId       = tableNum(ProdTable);
+            _supplyLineTmp.RefRecId         = prodTable.RecId;
+            _supplyLineTmp.insert();
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>insertTransferInTransit</Name>
+				<Source><![CDATA[
+    private static void insertTransferInTransit(
+        ResSupplyLineTmp    _supplyLineTmp,
+        ItemId              _itemId,
+        InventSiteId        _siteId,
+        InventLocationId    _warehouseId)
+    {
+        InventTransferLine  transferLine;
+        InventTransferTable transferTable;
+        InventDim           inventDim;
+        InventSiteId        receivingSiteId;
+        Qty                 availableQty;
+
+        while select transferLine
+            join transferTable
+            where transferTable.TransferId  == transferLine.TransferId
+            &&    transferTable.TransferStatus == InventTransferStatus::Shipped
+            &&    transferLine.ItemId       == _itemId
+            join inventDim
+            where inventDim.InventDimId     == transferLine.InventDimId
+        {
+            // Received-side warehouse governs where this supply will land.
+            if (_warehouseId && transferTable.InventLocationIdTo != _warehouseId)
+            {
+                continue;
+            }
+
+            receivingSiteId = InventLocation::find(transferTable.InventLocationIdTo).InventSiteId;
+
+            if (_siteId && receivingSiteId != _siteId)
+            {
+                continue;
+            }
+
+            availableQty = transferLine.QtyTransfer - ResSupplyProvider::alreadyConsumed(tableNum(InventTransferLine), transferLine.RecId);
+
+            // Same convention as insertOnHand's AvailPhysical != 0 filter --
+            // once a receipt line's remaining qty is fully reserved, it's no
+            // longer real usable supply and shouldn't clutter the grid.
+            if (availableQty <= 0)
+            {
+                continue;
+            }
+
+            _supplyLineTmp.clear();
+            _supplyLineTmp.SupplyType       = ResSupplyType::TransferInTransit;
+            _supplyLineTmp.SourceId         = transferLine.TransferId;
+            _supplyLineTmp.ItemId           = _itemId;
+            _supplyLineTmp.InventSiteId     = receivingSiteId;
+            _supplyLineTmp.InventLocationId = transferTable.InventLocationIdTo;
+            _supplyLineTmp.InventDimId      = transferLine.InventDimId;
+            _supplyLineTmp.BatchId          = inventDim.inventBatchId;
+            _supplyLineTmp.AvailableDate            = transferTable.ReceiveDate;
+            // QtyAvailable is the raw shipped transfer qty; AvailableForReservation
+            // nets off whatever this module has already committed against this
+            // exact InventTransferLine (see alreadyConsumed()'s remarks above).
+            _supplyLineTmp.QtyAvailable              = transferLine.QtyTransfer;
+            _supplyLineTmp.QtyReserved               = 0;
+            _supplyLineTmp.AvailableForReservation   = availableQty;
+            _supplyLineTmp.QualityStatusId           = inventDim.InventStatusId;
+            _supplyLineTmp.QualityApproved  = ResSupplyProvider::isQualityApproved(_itemId, inventDim.InventDimId);
+            _supplyLineTmp.RefTableId       = tableNum(InventTransferLine);
+            _supplyLineTmp.RefRecId         = transferLine.RecId;
+            _supplyLineTmp.insert();
+        }
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

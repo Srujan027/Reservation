@@ -1,0 +1,242 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResSetupRules</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// Single read-through accessor for all Reservation Workbench setup tables so that
+/// admin-maintained rules (priority, allocation, delivery policy, order type policy,
+/// risk thresholds) never require a code change to take effect.
+/// </summary>
+public class ResSetupRules
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>priorityTier</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Looks up the priority tier for a customer, falling back to the customer's
+    /// group, then to the default tier (5 = lowest) when no rule matches.
+    /// </summary>
+    public static ResPriorityTier priorityTier(CustAccount _custAccount, CustGroupId _custGroup)
+    {
+        ResPriorityRule priorityRule;
+        Date            today = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        select firstonly priorityRule
+            order by CustAccount desc
+            where priorityRule.CustAccount == _custAccount
+            &&  (!priorityRule.EffectiveFrom || priorityRule.EffectiveFrom <= today)
+            &&  (!priorityRule.EffectiveTo   || priorityRule.EffectiveTo   >= today);
+
+        if (!priorityRule.RecId && _custGroup)
+        {
+            select firstonly priorityRule
+                where priorityRule.CustGroup == _custGroup
+                &&  !priorityRule.CustAccount
+                &&  (!priorityRule.EffectiveFrom || priorityRule.EffectiveFrom <= today)
+                &&  (!priorityRule.EffectiveTo   || priorityRule.EffectiveTo   >= today);
+        }
+
+        return priorityRule.RecId ? priorityRule.PriorityTier : 5;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>findAllocationRule</Name>
+				<Source><![CDATA[
+    private static ResAllocationRule findAllocationRule(ItemId _itemId, ItemGroupId _itemGroup)
+    {
+        ResAllocationRule allocationRule;
+
+        select firstonly allocationRule
+            where allocationRule.ItemId == _itemId;
+
+        if (!allocationRule.RecId && _itemGroup)
+        {
+            select firstonly allocationRule
+                where allocationRule.ItemGroupId == _itemGroup
+                &&  !allocationRule.ItemId;
+        }
+
+        return allocationRule;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>allocationMethod</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// FEFO/FIFO allocation method for the item, falling back to the item group,
+    /// then defaulting to FEFO when no rule matches.
+    /// </summary>
+    public static ResAllocationMethod allocationMethod(ItemId _itemId, ItemGroupId _itemGroup)
+    {
+        ResAllocationRule allocationRule = ResSetupRules::findAllocationRule(_itemId, _itemGroup);
+
+        return allocationRule.RecId ? allocationRule.AllocationMethod : ResAllocationMethod::FEFO;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>nearExpiryBlockDays</Name>
+				<Source><![CDATA[
+    public static ResThresholdDays nearExpiryBlockDays(ItemId _itemId, ItemGroupId _itemGroup)
+    {
+        ResAllocationRule allocationRule = ResSetupRules::findAllocationRule(_itemId, _itemGroup);
+
+        return allocationRule.NearExpiryBlockDays;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>allowQuarantined</Name>
+				<Source><![CDATA[
+    public static NoYes allowQuarantined(ItemId _itemId, ItemGroupId _itemGroup)
+    {
+        ResAllocationRule allocationRule = ResSetupRules::findAllocationRule(_itemId, _itemGroup);
+
+        return allocationRule.AllowQuarantined;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>findDeliveryPolicy</Name>
+				<Source><![CDATA[
+    private static ResDeliveryPolicy findDeliveryPolicy(CustAccount _custAccount, CustGroupId _custGroup)
+    {
+        ResDeliveryPolicy deliveryPolicy;
+
+        select firstonly deliveryPolicy
+            where deliveryPolicy.CustAccount == _custAccount;
+
+        if (!deliveryPolicy.RecId && _custGroup)
+        {
+            select firstonly deliveryPolicy
+                where deliveryPolicy.CustGroup == _custGroup
+                &&  !deliveryPolicy.CustAccount;
+        }
+
+        return deliveryPolicy;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>allowPartialDeliverySales</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Allow-partial-delivery flag for a sales order line's customer scope.
+    /// Transfer orders are governed by <see cref="ResOrderTypePolicy"/> instead
+    /// (see <c>transferAllowPartial</c>).
+    /// </summary>
+    public static NoYes allowPartialDeliverySales(CustAccount _custAccount, CustGroupId _custGroup)
+    {
+        ResDeliveryPolicy deliveryPolicy = ResSetupRules::findDeliveryPolicy(_custAccount, _custGroup);
+
+        return deliveryPolicy.AllowPartialDelivery;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>allowMixedBatchSales</Name>
+				<Source><![CDATA[
+    public static NoYes allowMixedBatchSales(CustAccount _custAccount, CustGroupId _custGroup)
+    {
+        ResDeliveryPolicy deliveryPolicy = ResSetupRules::findDeliveryPolicy(_custAccount, _custGroup);
+
+        return deliveryPolicy.AllowMixedBatch;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>minFillPercentageSales</Name>
+				<Source><![CDATA[
+    public static ResFillPercentage minFillPercentageSales(CustAccount _custAccount, CustGroupId _custGroup)
+    {
+        ResDeliveryPolicy deliveryPolicy = ResSetupRules::findDeliveryPolicy(_custAccount, _custGroup);
+
+        return deliveryPolicy.MinFillPercentage;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>orderTypePolicy</Name>
+				<Source><![CDATA[
+    public static ResOrderTypePolicy orderTypePolicy()
+    {
+        return ResOrderTypePolicy::find();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>riskThreshold</Name>
+				<Source><![CDATA[
+    public static ResRiskThreshold riskThreshold()
+    {
+        return ResRiskThreshold::find();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>riskIndicator</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Green/Yellow/Red indicator for a demand line, based on the
+    /// admin-maintained <see cref="ResRiskThreshold"/> day thresholds counted
+    /// from today, escalated straight to Red whenever there isn't enough
+    /// eligible supply to cover the line regardless of how far out the ship
+    /// date is.
+    /// </summary>
+    /// <param name="_insufficientSupply">
+    /// Pass <c>NoYes::Yes</c> when the item's total eligible supply is less
+    /// than the line's remaining open quantity.
+    /// </param>
+    public static ResRiskIndicator riskIndicator(TransDate _requestedShipDate, NoYes _insufficientSupply = NoYes::No)
+    {
+        ResRiskThreshold    riskThreshold = ResSetupRules::riskThreshold();
+        Date                today         = DateTimeUtil::date(DateTimeUtil::utcNow());
+        int                 daysOut;
+
+        if (_insufficientSupply == NoYes::Yes)
+        {
+            return ResRiskIndicator::Red;
+        }
+
+        if (!_requestedShipDate)
+        {
+            return ResRiskIndicator::Green;
+        }
+
+        daysOut = _requestedShipDate - today;
+
+        if (daysOut <= riskThreshold.RedThresholdDays)
+        {
+            return ResRiskIndicator::Red;
+        }
+
+        if (daysOut <= riskThreshold.YellowThresholdDays)
+        {
+            return ResRiskIndicator::Yellow;
+        }
+
+        return ResRiskIndicator::Green;
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

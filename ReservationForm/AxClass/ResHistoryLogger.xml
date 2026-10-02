@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResHistoryLogger</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// Writes <c>ResHistoryLog</c> rows for one Reserve/Unreserve user action. All rows
+/// logged through a single instance share the same <c>TransactionId</c> so a user
+/// can trace everything one click affected; the id is simply the RecId of the first
+/// log row inserted by this instance (no separate number sequence is needed).
+/// </summary>
+public class ResHistoryLogger
+{
+    ResTransactionId transactionId;
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>construct</Name>
+				<Source><![CDATA[
+    public static ResHistoryLogger construct()
+    {
+        return new ResHistoryLogger();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>parmTransactionId</Name>
+				<Source><![CDATA[
+    public ResTransactionId parmTransactionId(ResTransactionId _transactionId = transactionId)
+    {
+        transactionId = _transactionId;
+
+        return transactionId;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>log</Name>
+				<Source><![CDATA[
+    public void log(
+        ResOrderType        _orderType,
+        InventTransRefId    _orderId,
+        LineNum             _lineNum,
+        ResAction           _action,
+        Qty                 _qtyAffected,
+        InventBatchId       _batchId,
+        ResRuleAppliedTxt   _ruleApplied,
+        ResReasonCodeId     _reasonCode         = '',
+        ResCommentTxt       _comment            = '',
+        RefTableId          _supplyRefTableId   = 0,
+        RefRecId            _supplyRefRecId     = 0)
+    {
+        ResHistoryLog historyLog;
+
+        ttsbegin;
+
+        historyLog.clear();
+        historyLog.TransactionId       = transactionId;
+        historyLog.OrderType           = _orderType;
+        historyLog.OrderId             = _orderId;
+        historyLog.LineNum             = _lineNum;
+        historyLog.Action              = _action;
+        historyLog.QtyAffected         = _qtyAffected;
+        historyLog.BatchId             = _batchId;
+        historyLog.RuleApplied         = _ruleApplied;
+        historyLog.ReasonCode          = _reasonCode;
+        historyLog.Comment             = _comment;
+        historyLog.SupplyRefTableId    = _supplyRefTableId;
+        historyLog.SupplyRefRecId      = _supplyRefRecId;
+        historyLog.insert();
+
+        if (!transactionId)
+        {
+            transactionId = historyLog.RecId;
+            historyLog.TransactionId = transactionId;
+            historyLog.update();
+        }
+
+        ttscommit;
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

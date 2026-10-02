@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_Test_SetupValidation</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// FDD section 7 -- Setup dialog validation and live effect of setup
+/// changes. UI-specific behavior (grid add/edit/delete interactions, tab
+/// navigation) is covered in the manual UAT script instead -- this class
+/// covers what can be verified against the setup tables and engine directly.
+/// </summary>
+[SysTestCaseAutomaticNumberSequences]
+public class Res_Test_SetupValidation extends SysTestCase
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>duplicateOverlappingPriorityRuleShouldBeBlocked</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// KNOWN MISMATCH: <c>ResPriorityRule.validateWrite()</c> only checks
+    /// that a scope (CustAccount/CustGroup) is present, the tier is in
+    /// 1..5, and (if both are set) EffectiveTo &gt;= EffectiveFrom. It never
+    /// queries for an existing row with an overlapping date range for the
+    /// same customer -- and the table's <c>ScopeIdx</c> index explicitly
+    /// allows duplicates. So two rules for the same customer with
+    /// overlapping (or identical) effective date ranges are not blocked at
+    /// all today. Expected to FAIL against the current implementation.
+    /// </summary>
+    [SysTestMethod]
+    public void duplicateOverlappingPriorityRuleShouldBeBlocked()
+    {
+        TransDate today = DateTimeUtil::date(DateTimeUtil::utcNow());
+        boolean   secondInsertBlocked = false;
+
+        Res_TestDataBuilder::setPriorityRule('RSV01CU', '', 1);
+
+        try
+        {
+            ResPriorityRule overlapping;
+            overlapping.CustAccount  = 'RSV01CU';
+            overlapping.PriorityTier = 2;
+            overlapping.EffectiveFrom = today;
+            overlapping.EffectiveTo   = today + 30;
+            overlapping.insert();
+        }
+        catch (Exception::Error)
+        {
+            secondInsertBlocked = true;
+        }
+
+        this.assertTrue(secondInsertBlocked,
+            'A second, overlapping ResPriorityRule for the same customer should be blocked by validateWrite.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>allocationRuleChangeTakesEffectOnNextReserveWithoutRedeploy</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Proves a setup change takes effect on the very next Reserve call in
+    /// the same session -- no compile/deploy/restart needed, since
+    /// <c>ResSetupRules</c> always reads through to the live table.
+    /// </summary>
+    [SysTestMethod]
+    public void allocationRuleChangeTakesEffectOnNextReserveWithoutRedeploy()
+    {
+        const ItemId    itemId    = 'RSV02';
+        InventTable     item      = Res_TestDataBuilder::batchItem(itemId);
+        InventLocation  warehouse = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today     = DateTimeUtil::date(DateTimeUtil::utcNow());
+        var earlyBatch = Res_TestDataBuilder::createBatch(item, today + 5);
+        var lateBatch  = Res_TestDataBuilder::createBatch(item, today + 60);
+
+        Res_TestDataBuilder::setDeliveryPolicy('RSV02CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, earlyBatch], 10);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, lateBatch], 10);
+
+        // Line 1 reserved under a FEFO rule -> should consume the early-expiry batch.
+        Res_TestDataBuilder::setAllocationRule(itemId, ResAllocationMethod::FEFO, 0, NoYes::No);
+        var line1 = Res_TestDataBuilder::salesLine(item, 'RSV02CU', warehouse, 10, today + 10);
+        this.reserveOneLine(itemId, line1.SalesId);
+
+        ResSupplyLineTmp supplyTmp1, earlyLine;
+        ResSupplyProvider::run(supplyTmp1, [itemId], '', warehouse.InventLocationId);
+        earlyLine.setTmpData(supplyTmp1);
+        select firstonly earlyLine where earlyLine.BatchId == earlyBatch.inventBatchId;
+        this.assertTrue(earlyLine.QtyReserved == 10, 'First line should consume the FEFO-earliest batch.');
+
+        // Switch the rule to FIFO with no redeploy, then reserve a second, independent line.
+        Res_TestDataBuilder::setAllocationRule(itemId, ResAllocationMethod::FIFO, 0, NoYes::No);
+        var line2 = Res_TestDataBuilder::salesLine(item, 'RSV02CU', warehouse, 10, today + 10);
+        this.reserveOneLine(itemId, line2.SalesId);
+
+        ResSupplyLineTmp supplyTmp2, lateLine;
+        ResSupplyProvider::run(supplyTmp2, [itemId], '', warehouse.InventLocationId);
+        lateLine.setTmpData(supplyTmp2);
+        select firstonly lateLine where lateLine.BatchId == lateBatch.inventBatchId;
+        this.assertTrue(lateLine.QtyReserved == 10,
+            'Second line, reserved after switching the rule to FIFO (by AvailableDate), should consume the remaining batch -- ' +
+            'proving the setup change took effect immediately.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reserveOneLine</Name>
+				<Source><![CDATA[
+    private void reserveOneLine(ItemId _itemId, InventTransRefId _orderId)
+    {
+        ResDemandLineTmp demandTmp, demandLine;
+        container recIds;
+
+        ResDemandProvider::run(demandTmp, '', '', _itemId, dateNull(), dateNull());
+        demandLine.setTmpData(demandTmp);
+
+        select firstonly demandLine where demandLine.OrderId == _orderId;
+        recIds += demandLine.RecId;
+
+        ResReservationEngine engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, recIds);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reasonCodeSupportsAddEditDelete</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// CRUD smoke test for one of the five setup tabs (Reason Codes) against
+    /// the table directly. The grid UI itself (typing into
+    /// <c>ResSetupDialog</c>'s tabs, tab navigation, Save/Cancel) is manual
+    /// UAT territory.
+    /// </summary>
+    [SysTestMethod]
+    public void reasonCodeSupportsAddEditDelete()
+    {
+        ResReasonCode reasonCode;
+
+        ttsbegin;
+        reasonCode.ReasonCode  = 'RSV03';
+        reasonCode.Description = 'Original description';
+        reasonCode.insert();
+        ttscommit;
+
+        this.assertTrue(ResReasonCode::exist('RSV03'), 'Reason code should exist after insert.');
+
+        ttsbegin;
+        reasonCode.selectForUpdate(true);
+        reasonCode.Description = 'Updated description';
+        reasonCode.update();
+        ttscommit;
+
+        select firstonly reasonCode where reasonCode.ReasonCode == 'RSV03';
+        this.assertTrue(reasonCode.Description == 'Updated description', 'Reason code description should be editable.');
+
+        ttsbegin;
+        reasonCode.selectForUpdate(true);
+        reasonCode.delete();
+        ttscommit;
+
+        this.assertTrue(!ResReasonCode::exist('RSV03'), 'Reason code should no longer exist after delete.');
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

@@ -1,0 +1,1340 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxForm xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="Microsoft.Dynamics.AX.Metadata.V6">
+	<Name>ResReservationScreen</Name>
+	<SourceCode>
+		<Methods xmlns="">
+			<Method>
+				<Name>classDeclaration</Name>
+				<Source><![CDATA[
+[Form]
+public class ResReservationScreen extends FormRun
+{
+    boolean historyVisible;
+}
+]]></Source>
+			</Method>
+			<Method>
+				<Name>init</Name>
+				<Source><![CDATA[
+    public void init()
+    {
+        super();
+
+        FilterGroup_DateFrom.dateValue(DateTimeUtil::date(DateTimeUtil::utcNow()));
+        FilterGroup_DateTo.dateValue(DateTimeUtil::date(DateTimeUtil::utcNow()) + 30);
+
+        // ReserveButton/UnreserveButton/ToggleHistoryButton are plain Button
+        // controls, and SetupButton's own automatic security trim is not
+        // re-evaluated by the framework either -- worse, selecting 2+ rows in
+        // the Demands grid forces ALL FOUR to disabled by default (standard
+        // ActionPane behavior once a grid enters genuine multi-selection)
+        // unless explicitly re-asserted. updateActionPaneForSelection() sets
+        // the correct baseline here and is re-run from ResDemandLineTmp's
+        // active() below every time the selection changes, so it stays
+        // correct through single- and multi-select alike.
+        element.updateActionPaneForSelection();
+
+        // History is hidden by default -- ToggleHistoryButton controls it from here on.
+        historyVisible = false;
+        this.updateHistoryVisibility();
+
+        // Order Type defaults to All, so the Order filter starts disabled --
+        // see updateOrderFilterEnabled().
+        this.updateOrderFilterEnabled();
+
+        element.refreshDemands();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>canExecuteReservations</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// ReserveButton/UnreserveButton are plain Button controls, not
+    /// MenuItemButtons -- unlike SetupButton, they have no entry point of
+    /// their own for the security framework to trim automatically. A user
+    /// holding only <c>ResReservationScreen_DM_View</c> (Read) on this
+    /// screen's entry point must not be able to execute a reservation, which
+    /// requires <c>ResReservationScreen_AM_Execute</c> (Update).
+    /// </summary>
+    private boolean canExecuteReservations()
+    {
+        SecurityRights securityRights = SecurityRights::construct();
+
+        // ResReservationScreen_DM_View grants Read (-> AccessRight::View) and
+        // ResReservationScreen_AM_Execute grants Read+Update (-> AccessRight::Edit)
+        // on the same ResReservationScreen entry point -- Edit is what
+        // distinguishes a user who can actually execute a reservation.
+        return securityRights.menuItemAccessRight(SecurableType::MenuItemDisplay, menuItemDisplayStr(ResReservationScreen)) >= AccessRight::Edit;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>canOpenSetup</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Mirrors the framework's own automatic trim for SetupButton (a
+    /// MenuFunctionButton to the ResSetupDialog Display menu item, normally
+    /// auto-enabled/disabled by View access on it) so that trim can be
+    /// re-asserted from updateActionPaneForSelection() after a multi-select
+    /// forces it to disabled -- without granting anything the framework
+    /// itself would not have already granted.
+    /// </summary>
+    private boolean canOpenSetup()
+    {
+        SecurityRights securityRights = SecurityRights::construct();
+
+        return securityRights.menuItemAccessRight(SecurableType::MenuItemDisplay, menuItemDisplayStr(ResSetupDialog)) >= AccessRight::View;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>updateActionPaneForSelection</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Selecting 2+ Demand lines forces every ActionPane button to disabled
+    /// by default (standard behavior once a grid enters genuine
+    /// multi-selection) unless the form explicitly re-enables the ones that
+    /// should stay usable. Reserve/Unreserve are designed to run against a
+    /// multi-selection (see selectedDemandRecIds()), so they stay enabled
+    /// per the user's own privilege regardless of how many lines are marked;
+    /// Setup has nothing to do with Demand selection at all, so it is
+    /// likewise re-asserted per its own privilege. History only ever shows
+    /// the single active line's audit trail (refreshHistoryForSelection()
+    /// filters to exactly one line), so it is deliberately left disabled
+    /// while more than one line is marked -- there is no single line's
+    /// history to show in that state.
+    /// </summary>
+    public void updateActionPaneForSelection()
+    {
+        Array   marked          = this.demandDs().recordsMarked();
+        boolean multiSelected   = marked && marked.lastIndex() > 1;
+
+        ReserveButton.enabled(this.canExecuteReservations());
+        UnreserveButton.enabled(this.canExecuteReservations());
+        SetupButton.enabled(this.canOpenSetup());
+        ToggleHistoryButton.enabled(!multiSelected);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>updateHistoryVisibility</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Applies the current <c>historyVisible</c> state to the History pane,
+    /// its splitters (above and below), the bottom filler, and the toggle
+    /// button's own label.
+    /// </summary>
+    private void updateHistoryVisibility()
+    {
+        HistoryTab.visible(historyVisible);
+        MainHistorySplitter.visible(historyVisible);
+        BottomSplitter.visible(historyVisible);
+        BottomFiller.visible(historyVisible);
+
+        ToggleHistoryButton.text(historyVisible
+            ? "@ResReservation:ResReservationScreen_HideHistory"
+            : "@ResReservation:ResReservationScreen_ShowHistory");
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>updateOrderFilterEnabled</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// The Order filter only makes sense once a specific order type is chosen
+    /// -- a single order id can't be both a SalesId and a TransferId, so
+    /// there is no single id space to filter against when Order Type is All.
+    /// Disables (and clears) the field in that case; <c>FilterGroup_Order</c>'s
+    /// own <c>lookup()</c> then scopes the dropdown to open Sales orders or
+    /// open Transfer orders depending on whichever type is selected.
+    /// </summary>
+    private void updateOrderFilterEnabled()
+    {
+        boolean enabled = FilterGroup_OrderType.selection() != ResOrderTypeFilter::All;
+
+        FilterGroup_Order.enabled(enabled);
+
+        if (!enabled)
+        {
+            FilterGroup_Order.text('');
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>demandDs</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// The Demands FormDataSource, fetched explicitly. Bare implicit access to a
+    /// datasource by name is only reliably in scope inside that datasource's own
+    /// methods or a control's own methods -- not the form's top-level methods,
+    /// unless the datasource happens to share the form's name (ours don't).
+    /// </summary>
+    private FormDataSource demandDs()
+    {
+        return element.dataSource(tableStr(ResDemandLineTmp));
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>supplyDs</Name>
+				<Source><![CDATA[
+    private FormDataSource supplyDs()
+    {
+        return element.dataSource(tableStr(ResSupplyLineTmp));
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>historyDs</Name>
+				<Source><![CDATA[
+    private FormDataSource historyDs()
+    {
+        return element.dataSource(tableStr(ResHistoryLog));
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>refreshDemands</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Re-runs the Demands query from the current filter fields (Refresh and
+    /// Filter buttons; also called on load), then re-scopes the Supplies grid
+    /// to whichever Demand line ends up selected (or clears it, if none does).
+    /// </summary>
+    public void refreshDemands()
+    {
+        FormDataSource      demandDs     = this.demandDs();
+
+        ResDemandProvider::run(
+            demandDs.cursor(),
+            FilterGroup_Site.text(),
+            FilterGroup_Warehouse.text(),
+            FilterGroup_Item.text(),
+            FilterGroup_DateFrom.dateValue(),
+            FilterGroup_DateTo.dateValue(),
+            FilterGroup_OrderType.selection(),
+            FilterGroup_Order.text());
+
+        demandDs.executeQuery();
+
+        // demandDs.executeQuery() already fires ResDemandLineTmp's active(),
+        // which calls this for the new current row -- but calling it again
+        // explicitly here also covers the case where the query comes back
+        // empty (no active row to fire active() against), so the Supplies
+        // grid still ends up correctly scoped/cleared either way.
+        element.refreshSuppliesForSelection();
+        element.refreshHistoryForSelection();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>refreshSuppliesForSelection</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Narrows the Supplies grid to the EXACT item/site/warehouse of whichever
+    /// Demand row(s) are currently selected -- the FDD's "auto-highlighting of
+    /// matching Supply rows". Previously this scoped by item only and fell back
+    /// to the screen's Site/Warehouse filter fields (no restriction when blank),
+    /// which could show supply from a different site/warehouse than the
+    /// selected Demand line's own -- supply Reserve could never actually use,
+    /// since <c>ResReservationEngine.eligibleSupplyRecIds()</c> always filters
+    /// strictly to the demand line's own site/warehouse.
+    /// </summary>
+    public void refreshSuppliesForSelection()
+    {
+        FormDataSource          supplyDs        = this.supplyDs();
+        ResSupplyLineTmp        supplyBuffer    = supplyDs.cursor();
+        container               selectedRecIds  = this.selectedDemandRecIds(false);
+
+        ResSupplyProvider::runForSelectedDemand(supplyBuffer, this.demandDs().cursor(), selectedRecIds);
+
+        supplyDs.executeQuery();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>refreshHistoryForSelection</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Narrows the History grid to the exact demand line currently active, so a
+    /// user can see -- for the specific order/line they just reserved or
+    /// unreserved -- which batch/supply record the engine actually used
+    /// (<c>ResHistoryLog.BatchId</c>/<c>RuleApplied</c>, written by
+    /// <c>ResReservationEngine.commitReservation</c>).
+    /// </summary>
+    public void refreshHistoryForSelection()
+    {
+        FormDataSource          historyDs     = this.historyDs();
+        ResDemandLineTmp        demandLineTmp = this.demandDs().cursor();
+        QueryBuildDataSource    qbds          = historyDs.query().dataSourceTable(tableNum(ResHistoryLog));
+
+        qbds.clearRanges();
+
+        if (demandLineTmp.RecId)
+        {
+            qbds.addRange(fieldNum(ResHistoryLog, OrderType)).value(queryValue(demandLineTmp.OrderType));
+            qbds.addRange(fieldNum(ResHistoryLog, OrderId)).value(queryValue(demandLineTmp.OrderId));
+            qbds.addRange(fieldNum(ResHistoryLog, LineNum)).value(queryValue(demandLineTmp.LineNum));
+        }
+        else
+        {
+            qbds.addRange(fieldNum(ResHistoryLog, RecId)).value(queryValue(0));
+        }
+
+        historyDs.executeQuery();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>selectedDemandRecIds</Name>
+				<Source><![CDATA[
+    private container selectedDemandRecIds(boolean _reservedOnly)
+    {
+        MultiSelectionHelper    selectionHelper = MultiSelectionHelper::construct();
+        ResDemandLineTmp        demandLineTmp;
+        container               recIds;
+
+        selectionHelper.parmDatasource(this.demandDs());
+        demandLineTmp = selectionHelper.getFirst();
+
+        while (demandLineTmp)
+        {
+            if (!_reservedOnly || demandLineTmp.ReservedQty > 0)
+            {
+                recIds += demandLineTmp.RecId;
+            }
+
+            demandLineTmp = selectionHelper.getNext();
+        }
+
+        return recIds;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reserveSelected</Name>
+				<Source><![CDATA[
+    public void reserveSelected()
+    {
+        container               selectedRecIds = this.selectedDemandRecIds(false);
+        ResReservationEngine     engine;
+
+        if (!conLen(selectedRecIds))
+        {
+            warning("@ResReservation:ResReservationScreen_NoLinesSelected");
+            return;
+        }
+
+        engine = ResReservationEngine::construct();
+        engine.reserve(this.demandDs().cursor(), selectedRecIds);
+
+        info(strFmt(
+            "@ResReservation:ResReservationScreen_ReserveSummary",
+            engine.parmLinesFullyReserved(),
+            engine.parmLinesPartiallyReserved(),
+            engine.parmLinesSkipped()));
+
+        element.refreshDemands();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>unreserveSelected</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// The reason dialog is received as a plain <c>FormRun</c> (never as its own
+    /// specific form class) -- that is the pattern used consistently throughout the
+    /// standard product for launching a modal dialog from another form's code.
+    /// The reason code/comment come back via <c>args.parmObject()</c>, a container
+    /// of [reasonCode, comment], set by the dialog's OK button before it closes.
+    /// </summary>
+    public void unreserveSelected()
+    {
+        container               selectedRecIds = this.selectedDemandRecIds(true);
+        Args                     args;
+        ClassFactory             factory;
+        FormRun                  reasonDialog;
+        ResReservationEngine     engine;
+        ContainerClass           resultWrapper;
+        container                result;
+
+        if (!conLen(selectedRecIds))
+        {
+            warning("@ResReservation:ResReservationScreen_NoReservedLinesSelected");
+            return;
+        }
+
+        args = new Args(formStr(ResUnreserveReasonDialog));
+        factory = new ClassFactory();
+        reasonDialog = factory.formRunClass(args);
+        reasonDialog.init();
+        reasonDialog.run();
+        reasonDialog.wait();
+
+        if (reasonDialog.closedOk())
+        {
+            resultWrapper = args.parmObject();
+            result = resultWrapper.value();
+
+            engine = ResReservationEngine::construct();
+            engine.unreserve(
+                this.demandDs().cursor(),
+                selectedRecIds,
+                conPeek(result, 1),
+                conPeek(result, 2));
+
+            info(strFmt("@ResReservation:ResReservationScreen_UnreserveSummary", conLen(selectedRecIds)));
+
+            element.refreshDemands();
+        }
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+		<DataSources xmlns="">
+			<DataSource>
+				<Name>ResDemandLineTmp</Name>
+				<Methods>
+					<Method>
+						<Name>active</Name>
+						<Source><![CDATA[
+        public int active()
+        {
+            int ret = super();
+
+            element.refreshSuppliesForSelection();
+            element.refreshHistoryForSelection();
+            element.updateActionPaneForSelection();
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+					<Method>
+						<Name>displayOption</Name>
+						<Source><![CDATA[
+        public void displayOption(Common _record, FormRowDisplayOption _options)
+        {
+            ResDemandLineTmp demandLineTmp = _record;
+
+            super(_record, _options);
+
+            switch (demandLineTmp.RiskIndicator)
+            {
+                case ResRiskIndicator::Red:
+                    _options.backColor(WinApi::RGB2int(255, 199, 206));
+                    break;
+                case ResRiskIndicator::Yellow:
+                    _options.backColor(WinApi::RGB2int(255, 235, 156));
+                    break;
+                case ResRiskIndicator::Green:
+                    _options.backColor(WinApi::RGB2int(198, 239, 206));
+                    break;
+            }
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+				<Fields />
+			</DataSource>
+			<DataSource>
+				<Name>ResHistoryLog</Name>
+				<Methods>
+					<Method>
+						<Name>init</Name>
+						<Source><![CDATA[
+        public void init()
+        {
+            super();
+
+            this.query().dataSourceTable(tableNum(ResHistoryLog)).addSortField(fieldNum(ResHistoryLog, RecId), SortOrder::Descending);
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+				<Fields />
+			</DataSource>
+		</DataSources>
+		<DataControls xmlns="">
+			<Control>
+				<Name>RefreshButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            element.refreshDemands();
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>ReserveButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            element.reserveSelected();
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>UnreserveButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            element.unreserveSelected();
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>ToggleHistoryButton</Name>
+				<Type>Button</Type>
+				<Methods>
+					<Method>
+						<Name>clicked</Name>
+						<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            historyVisible = !historyVisible;
+            element.updateHistoryVisibility();
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>FilterGroup_Site</Name>
+				<Type>String</Type>
+				<Methods>
+					<Method>
+						<Name>modified</Name>
+						<Source><![CDATA[
+        public boolean modified()
+        {
+            boolean ret = super();
+
+            element.refreshDemands();
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>FilterGroup_Warehouse</Name>
+				<Type>String</Type>
+				<Methods>
+					<Method>
+						<Name>modified</Name>
+						<Source><![CDATA[
+        public boolean modified()
+        {
+            boolean ret = super();
+
+            element.refreshDemands();
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>FilterGroup_Item</Name>
+				<Type>String</Type>
+				<Methods>
+					<Method>
+						<Name>modified</Name>
+						<Source><![CDATA[
+        public boolean modified()
+        {
+            boolean ret = super();
+
+            element.refreshDemands();
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>FilterGroup_OrderType</Name>
+				<Type>ComboBox</Type>
+				<Methods>
+					<Method>
+						<Name>modified</Name>
+						<Source><![CDATA[
+        public boolean modified()
+        {
+            boolean ret = super();
+
+            element.updateOrderFilterEnabled();
+            element.refreshDemands();
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>FilterGroup_Order</Name>
+				<Type>String</Type>
+				<Methods>
+					<Method>
+						<Name>modified</Name>
+						<Source><![CDATA[
+        public boolean modified()
+        {
+            boolean ret = super();
+
+            element.refreshDemands();
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+					<Method>
+						<Name>lookup</Name>
+						<Source><![CDATA[
+        /// <summary>
+        /// InventTransRefId is a generic reference id (shared by SalesId,
+        /// TransferId, PurchId, ProdId, ...) with no lookup of its own.
+        /// Scope the dropdown to whichever order type is currently selected
+        /// in FilterGroup_OrderType, showing only open orders -- same
+        /// "open" definition ResDemandProvider uses to build the Demands
+        /// grid (RemainInventPhysical &gt; 0 for Sales, QtyRemainShip &gt; 0
+        /// for Transfer). Order Type = All has no single id space to look
+        /// up against, and the field is disabled in that state anyway (see
+        /// element.updateOrderFilterEnabled()).
+        /// </summary>
+        public void lookup()
+        {
+            Query                   query;
+            QueryBuildDataSource     qbdsHeader;
+            QueryBuildDataSource     qbdsLine;
+            SysTableLookup           sysTableLookup;
+
+            switch (FilterGroup_OrderType.selection())
+            {
+                case ResOrderTypeFilter::Sales:
+                    sysTableLookup = SysTableLookup::newParameters(tableNum(SalesTable), this);
+                    sysTableLookup.addLookupfield(fieldNum(SalesTable, SalesId));
+                    sysTableLookup.addLookupfield(fieldNum(SalesTable, CustAccount));
+                    sysTableLookup.addLookupfield(fieldNum(SalesTable, SalesName));
+
+                    query = new Query();
+                    qbdsHeader = query.addDataSource(tableNum(SalesTable));
+                    qbdsHeader.addRange(fieldNum(SalesTable, SalesStatus)).value(strFmt('!%1', enum2int(SalesStatus::Canceled)));
+                    qbdsHeader.addRange(fieldNum(SalesTable, DocumentStatus)).value(strFmt('!%1', enum2int(DocumentStatus::Quotation)));
+
+                    qbdsLine = qbdsHeader.addDataSource(tableNum(SalesLine));
+                    qbdsLine.relations(true);
+                    qbdsLine.joinMode(JoinMode::ExistsJoin);
+                    qbdsLine.addRange(fieldNum(SalesLine, RemainInventPhysical)).value('>0');
+
+                    sysTableLookup.parmQuery(query);
+                    sysTableLookup.performFormLookup();
+                    break;
+
+                case ResOrderTypeFilter::Transfer:
+                    sysTableLookup = SysTableLookup::newParameters(tableNum(InventTransferTable), this);
+                    sysTableLookup.addLookupfield(fieldNum(InventTransferTable, TransferId));
+                    sysTableLookup.addLookupfield(fieldNum(InventTransferTable, InventLocationIdFrom));
+                    sysTableLookup.addLookupfield(fieldNum(InventTransferTable, InventLocationIdTo));
+
+                    query = new Query();
+                    qbdsHeader = query.addDataSource(tableNum(InventTransferTable));
+
+                    qbdsLine = qbdsHeader.addDataSource(tableNum(InventTransferLine));
+                    qbdsLine.relations(true);
+                    qbdsLine.joinMode(JoinMode::ExistsJoin);
+                    qbdsLine.addRange(fieldNum(InventTransferLine, QtyRemainShip)).value('>0');
+
+                    sysTableLookup.parmQuery(query);
+                    sysTableLookup.performFormLookup();
+                    break;
+
+                default:
+                    super();
+            }
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>FilterGroup_DateFrom</Name>
+				<Type>Date</Type>
+				<Methods>
+					<Method>
+						<Name>modified</Name>
+						<Source><![CDATA[
+        public boolean modified()
+        {
+            boolean ret = super();
+
+            element.refreshDemands();
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+			<Control>
+				<Name>FilterGroup_DateTo</Name>
+				<Type>Date</Type>
+				<Methods>
+					<Method>
+						<Name>modified</Name>
+						<Source><![CDATA[
+        public boolean modified()
+        {
+            boolean ret = super();
+
+            element.refreshDemands();
+
+            return ret;
+        }
+
+]]></Source>
+					</Method>
+				</Methods>
+			</Control>
+		</DataControls>
+		<Members xmlns="" />
+	</SourceCode>
+	<DataSources>
+		<AxFormDataSource xmlns="">
+			<Name>ResDemandLineTmp</Name>
+			<Table>ResDemandLineTmp</Table>
+			<Fields />
+			<ReferencedDataSources />
+			<DataSourceLinks />
+			<DerivedDataSources />
+		</AxFormDataSource>
+		<AxFormDataSource xmlns="">
+			<Name>ResSupplyLineTmp</Name>
+			<Table>ResSupplyLineTmp</Table>
+			<Fields />
+			<ReferencedDataSources />
+			<DataSourceLinks />
+			<DerivedDataSources />
+		</AxFormDataSource>
+		<AxFormDataSource xmlns="">
+			<Name>ResHistoryLog</Name>
+			<Table>ResHistoryLog</Table>
+			<Fields />
+			<ReferencedDataSources />
+			<DataSourceLinks />
+			<DerivedDataSources />
+		</AxFormDataSource>
+	</DataSources>
+	<Design>
+		<Caption xmlns="">@ResReservation:ResReservationScreen</Caption>
+		<Pattern xmlns="">Custom</Pattern>
+		<ShowDeleteButton xmlns="">No</ShowDeleteButton>
+		<ShowNewButton xmlns="">No</ShowNewButton>
+		<ViewEditMode xmlns="">Edit</ViewEditMode>
+		<Controls xmlns="">
+			<AxFormControl xmlns=""
+				i:type="AxFormActionPaneControl">
+				<Name>ActionPane</Name>
+				<Type>ActionPane</Type>
+				<FormControlExtension
+					i:nil="true" />
+				<Controls>
+					<AxFormControl xmlns=""
+						i:type="AxFormButtonGroupControl">
+						<Name>MaintainGroup</Name>
+						<Type>ButtonGroup</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormButtonControl">
+								<Name>RefreshButton</Name>
+								<AutoDeclaration>Yes</AutoDeclaration>
+								<Type>Button</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<ButtonDisplay>TextWithImageLeft</ButtonDisplay>
+								<NormalImage>Refresh</NormalImage>
+								<Text>@ResReservation:ResReservationScreen_Refresh</Text>
+							</AxFormControl>
+						</Controls>
+						<Caption>@ResReservation:ResReservationScreen_MaintainGroup</Caption>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormButtonGroupControl">
+						<Name>ReservationGroup</Name>
+						<Type>ButtonGroup</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormButtonControl">
+								<Name>ReserveButton</Name>
+								<AutoDeclaration>Yes</AutoDeclaration>
+								<Type>Button</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<MultiSelect>Yes</MultiSelect>
+								<NormalImage>Reserve</NormalImage>
+								<Text>@ResReservation:ResReservationScreen_Reserve</Text>
+							</AxFormControl>
+							<AxFormControl xmlns=""
+								i:type="AxFormButtonControl">
+								<Name>UnreserveButton</Name>
+								<AutoDeclaration>Yes</AutoDeclaration>
+								<Type>Button</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<MultiSelect>Yes</MultiSelect>
+								<NormalImage>Cancel</NormalImage>
+								<Text>@ResReservation:ResReservationScreen_Unreserve</Text>
+							</AxFormControl>
+						</Controls>
+						<Caption>@ResReservation:ResReservationScreen_ReservationGroup</Caption>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormButtonGroupControl">
+						<Name>ViewGroup</Name>
+						<Type>ButtonGroup</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormButtonControl">
+								<Name>ToggleHistoryButton</Name>
+								<AutoDeclaration>Yes</AutoDeclaration>
+								<Type>Button</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<ButtonDisplay>TextWithImageLeft</ButtonDisplay>
+								<NormalImage>History</NormalImage>
+								<Text>@ResReservation:ResReservationScreen_ShowHistory</Text>
+							</AxFormControl>
+						</Controls>
+						<Caption>@ResReservation:ResReservationScreen_ViewGroup</Caption>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormButtonGroupControl">
+						<Name>ConfigureGroup</Name>
+						<Type>ButtonGroup</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormMenuFunctionButtonControl">
+								<Name>SetupButton</Name>
+								<AutoDeclaration>Yes</AutoDeclaration>
+								<Type>MenuFunctionButton</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<ButtonDisplay>TextWithImageLeft</ButtonDisplay>
+								<MenuItemName>ResSetupDialog</MenuItemName>
+								<NormalImage>Setup</NormalImage>
+								<SaveRecord>No</SaveRecord>
+								<Text>@ResReservation:ResReservationScreen_Setup</Text>
+							</AxFormControl>
+						</Controls>
+						<Caption>@ResReservation:ResReservationScreen_ConfigureGroup</Caption>
+					</AxFormControl>
+				</Controls>
+			</AxFormControl>
+			<AxFormControl xmlns=""
+				i:type="AxFormGroupControl">
+				<Name>FilterGroup</Name>
+				<Type>Group</Type>
+				<FormControlExtension
+					i:nil="true" />
+				<Controls>
+					<AxFormControl xmlns=""
+						i:type="AxFormStringControl">
+						<Name>FilterGroup_Site</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>String</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<ExtendedDataType>InventSiteId</ExtendedDataType>
+						<Label>@ResReservation:ResReservationScreen_Site</Label>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormStringControl">
+						<Name>FilterGroup_Warehouse</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>String</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<ExtendedDataType>InventLocationId</ExtendedDataType>
+						<Label>@ResReservation:ResReservationScreen_Warehouse</Label>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormStringControl">
+						<Name>FilterGroup_Item</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>String</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<ExtendedDataType>ItemId</ExtendedDataType>
+						<Label>@ResReservation:ResReservationScreen_Item</Label>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormComboBoxControl">
+						<Name>FilterGroup_OrderType</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>ComboBox</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<EnumType>ResOrderTypeFilter</EnumType>
+						<Label>@ResReservation:ResReservationScreen_OrderType</Label>
+						<Items />
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormStringControl">
+						<Name>FilterGroup_Order</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>String</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<ExtendedDataType>InventTransRefId</ExtendedDataType>
+						<Label>@ResReservation:ResReservationScreen_Order</Label>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormDateControl">
+						<Name>FilterGroup_DateFrom</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>Date</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<ExtendedDataType>FromDate</ExtendedDataType>
+						<Label>@ResReservation:ResReservationScreen_DateFrom</Label>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormDateControl">
+						<Name>FilterGroup_DateTo</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>Date</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<ExtendedDataType>ToDate</ExtendedDataType>
+						<Label>@ResReservation:ResReservationScreen_DateTo</Label>
+					</AxFormControl>
+				</Controls>
+				<ArrangeMethod>HorizontalLeft</ArrangeMethod>
+				<Caption>@ResReservation:ResReservationScreen_FilterGroup</Caption>
+			</AxFormControl>
+			<AxFormControl xmlns=""
+				i:type="AxFormGroupControl">
+				<Name>MainFastTabs</Name>
+				<HeightMode>SizeToAvailable</HeightMode>
+				<Type>Group</Type>
+				<FormControlExtension
+					i:nil="true" />
+				<Controls>
+					<AxFormControl xmlns=""
+						i:type="AxFormGroupControl">
+						<Name>DemandsSuppliesRow</Name>
+						<HeightMode>SizeToAvailable</HeightMode>
+						<Type>Group</Type>
+						<WidthMode>SizeToAvailable</WidthMode>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormGroupControl">
+								<Name>DemandsTab</Name>
+								<HeightMode>SizeToAvailable</HeightMode>
+								<Type>Group</Type>
+								<WidthMode>SizeToAvailable</WidthMode>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormGridControl">
+										<Name>DemandsGrid</Name>
+										<AllowEdit>No</AllowEdit>
+										<Height>10</Height>
+										<HeightMode>Auto</HeightMode>
+										<Type>Grid</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<Controls>
+											<AxFormControl xmlns=""
+												i:type="AxFormStringControl">
+												<Name>DemandsGrid_OrderId</Name>
+												<Type>String</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>OrderId</DataField>
+												<DataSource>ResDemandLineTmp</DataSource>
+												<Label>@ResReservation:ResDemandLineTmp_OrderId</Label>
+											</AxFormControl>
+											<AxFormControl xmlns=""
+												i:type="AxFormStringControl">
+												<Name>DemandsGrid_ItemId</Name>
+												<Type>String</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>ItemId</DataField>
+												<DataSource>ResDemandLineTmp</DataSource>
+												<Label>@ResReservation:ResReservationScreen_Item</Label>
+											</AxFormControl>
+											<AxFormControl xmlns=""
+												i:type="AxFormDateControl">
+												<Name>DemandsGrid_RequestedShipDate</Name>
+												<Type>Date</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>RequestedShipDate</DataField>
+												<DataSource>ResDemandLineTmp</DataSource>
+												<Label>@ResReservation:ResDemandLineTmp_RequestedShipDate</Label>
+											</AxFormControl>
+											<AxFormControl xmlns=""
+												i:type="AxFormRealControl">
+												<Name>DemandsGrid_OpenQty</Name>
+												<Type>Real</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>OpenQty</DataField>
+												<DataSource>ResDemandLineTmp</DataSource>
+												<Label>@ResReservation:ResDemandLineTmp_OpenQty</Label>
+											</AxFormControl>
+											<AxFormControl xmlns=""
+												i:type="AxFormRealControl">
+												<Name>DemandsGrid_ReservedQty</Name>
+												<Type>Real</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>ReservedQty</DataField>
+												<DataSource>ResDemandLineTmp</DataSource>
+												<Label>@ResReservation:ResDemandLineTmp_ReservedQty</Label>
+											</AxFormControl>
+											<AxFormControl xmlns=""
+												i:type="AxFormComboBoxControl">
+												<Name>DemandsGrid_ReservationStatus</Name>
+												<Type>ComboBox</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>ReservationStatus</DataField>
+												<DataSource>ResDemandLineTmp</DataSource>
+												<Label>@ResReservation:ResReservationStatus</Label>
+												<Items />
+											</AxFormControl>
+										</Controls>
+										<DataSource>ResDemandLineTmp</DataSource>
+									</AxFormControl>
+								</Controls>
+								<Caption>@ResReservation:ResReservationScreen_DemandsTab</Caption>
+							</AxFormControl>
+							<AxFormControl xmlns=""
+								i:type="AxFormGroupControl">
+								<Name>DemandsSuppliesSplitter</Name>
+								<Type>Group</Type>
+								<Width>5</Width>
+								<WidthMode>Manual</WidthMode>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls />
+								<AlignChild>No</AlignChild>
+								<BackgroundColor>WindowBackground</BackgroundColor>
+								<Style>SplitterVerticalContainer</Style>
+							</AxFormControl>
+							<AxFormControl xmlns=""
+								i:type="AxFormGroupControl">
+								<Name>SuppliesTab</Name>
+								<HeightMode>SizeToAvailable</HeightMode>
+								<Type>Group</Type>
+								<WidthMode>SizeToAvailable</WidthMode>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormGridControl">
+										<Name>SuppliesGrid</Name>
+										<AllowEdit>No</AllowEdit>
+										<Height>10</Height>
+										<HeightMode>Auto</HeightMode>
+										<Type>Grid</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<Controls>
+											<AxFormControl xmlns=""
+												i:type="AxFormStringControl">
+												<Name>SuppliesGrid_SourceId</Name>
+												<Type>String</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>SourceId</DataField>
+												<DataSource>ResSupplyLineTmp</DataSource>
+												<Label>@ResReservation:ResSupplyLineTmp_SourceId</Label>
+											</AxFormControl>
+											<AxFormControl xmlns=""
+												i:type="AxFormStringControl">
+												<Name>SuppliesGrid_ItemId</Name>
+												<Type>String</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>ItemId</DataField>
+												<DataSource>ResSupplyLineTmp</DataSource>
+												<Label>@ResReservation:ResReservationScreen_Item</Label>
+											</AxFormControl>
+											<AxFormControl xmlns=""
+												i:type="AxFormDateControl">
+												<Name>SuppliesGrid_ExpirationDate</Name>
+												<Type>Date</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>ExpirationDate</DataField>
+												<DataSource>ResSupplyLineTmp</DataSource>
+												<Label>@ResReservation:ResSupplyLineTmp_ExpirationDate</Label>
+											</AxFormControl>
+											<AxFormControl xmlns=""
+												i:type="AxFormDateControl">
+												<Name>SuppliesGrid_AvailableDate</Name>
+												<Type>Date</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>AvailableDate</DataField>
+												<DataSource>ResSupplyLineTmp</DataSource>
+												<Label>@ResReservation:ResSupplyLineTmp_AvailableDate</Label>
+											</AxFormControl>
+											<AxFormControl xmlns=""
+												i:type="AxFormRealControl">
+												<Name>SuppliesGrid_QtyAvailable</Name>
+												<Type>Real</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>QtyAvailable</DataField>
+												<DataSource>ResSupplyLineTmp</DataSource>
+												<Label>@ResReservation:ResSupplyLineTmp_QtyAvailable</Label>
+											</AxFormControl>
+											<AxFormControl xmlns=""
+												i:type="AxFormRealControl">
+												<Name>SuppliesGrid_AvailableForReservation</Name>
+												<Type>Real</Type>
+												<FormControlExtension
+													i:nil="true" />
+												<DataField>AvailableForReservation</DataField>
+												<DataSource>ResSupplyLineTmp</DataSource>
+												<Label>@ResReservation:ResSupplyLineTmp_AvailableForReservation</Label>
+											</AxFormControl>
+										</Controls>
+										<DataSource>ResSupplyLineTmp</DataSource>
+									</AxFormControl>
+								</Controls>
+								<Caption>@ResReservation:ResReservationScreen_SuppliesTab</Caption>
+							</AxFormControl>
+						</Controls>
+						<ArrangeMethod>HorizontalLeft</ArrangeMethod>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormGroupControl">
+						<Name>MainHistorySplitter</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Height>5</Height>
+						<HeightMode>Manual</HeightMode>
+						<Type>Group</Type>
+						<WidthMode>SizeToAvailable</WidthMode>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls />
+						<AlignChild>No</AlignChild>
+						<BackgroundColor>WindowBackground</BackgroundColor>
+						<Style>SplitterHorizontalContainer</Style>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormGroupControl">
+						<Name>HistoryTab</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<HeightMode>SizeToAvailable</HeightMode>
+						<Type>Group</Type>
+						<WidthMode>SizeToAvailable</WidthMode>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls>
+							<AxFormControl xmlns=""
+								i:type="AxFormGridControl">
+								<Name>HistoryGrid</Name>
+								<AllowEdit>No</AllowEdit>
+								<Height>10</Height>
+								<HeightMode>Auto</HeightMode>
+								<Type>Grid</Type>
+								<FormControlExtension
+									i:nil="true" />
+								<Controls>
+									<AxFormControl xmlns=""
+										i:type="AxFormComboBoxControl">
+										<Name>HistoryGrid_Action</Name>
+										<Type>ComboBox</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>Action</DataField>
+										<DataSource>ResHistoryLog</DataSource>
+										<Label>@ResReservation:ResAction</Label>
+										<Items />
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormRealControl">
+										<Name>HistoryGrid_QtyAffected</Name>
+										<Type>Real</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>QtyAffected</DataField>
+										<DataSource>ResHistoryLog</DataSource>
+										<Label>@ResReservation:ResHistoryLog_QtyAffected</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>HistoryGrid_BatchId</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>BatchId</DataField>
+										<DataSource>ResHistoryLog</DataSource>
+										<Label>@ResReservation:ResHistoryLog_BatchId</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>HistoryGrid_RuleApplied</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>RuleApplied</DataField>
+										<DataSource>ResHistoryLog</DataSource>
+										<Label>@ResReservation:ResHistoryLog_RuleApplied</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>HistoryGrid_ReasonCode</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>ReasonCode</DataField>
+										<DataSource>ResHistoryLog</DataSource>
+										<Label>@ResReservation:ResHistoryLog_ReasonCode</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>HistoryGrid_Comment</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>Comment</DataField>
+										<DataSource>ResHistoryLog</DataSource>
+										<Label>@ResReservation:ResHistoryLog_Comment</Label>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormStringControl">
+										<Name>HistoryGrid_CreatedBy</Name>
+										<Type>String</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>CreatedBy</DataField>
+										<DataSource>ResHistoryLog</DataSource>
+									</AxFormControl>
+									<AxFormControl xmlns=""
+										i:type="AxFormDateTimeControl">
+										<Name>HistoryGrid_CreatedDateTime</Name>
+										<Type>DateTime</Type>
+										<FormControlExtension
+											i:nil="true" />
+										<DataField>CreatedDateTime</DataField>
+										<DataSource>ResHistoryLog</DataSource>
+									</AxFormControl>
+								</Controls>
+								<DataSource>ResHistoryLog</DataSource>
+							</AxFormControl>
+						</Controls>
+						<Caption>@ResReservation:ResReservationScreen_HistoryTab</Caption>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormGroupControl">
+						<Name>BottomSplitter</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Height>5</Height>
+						<HeightMode>Manual</HeightMode>
+						<Type>Group</Type>
+						<WidthMode>SizeToAvailable</WidthMode>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls />
+						<AlignChild>No</AlignChild>
+						<BackgroundColor>WindowBackground</BackgroundColor>
+						<Style>SplitterHorizontalContainer</Style>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormGroupControl">
+						<Name>BottomFiller</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<HeightMode>SizeToAvailable</HeightMode>
+						<Type>Group</Type>
+						<WidthMode>SizeToAvailable</WidthMode>
+						<FormControlExtension
+							i:nil="true" />
+						<Controls />
+					</AxFormControl>
+				</Controls>
+			</AxFormControl>
+		</Controls>
+	</Design>
+	<Parts />
+</AxForm>

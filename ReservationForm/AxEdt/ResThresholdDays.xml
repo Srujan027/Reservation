@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEdt xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns=""
+	i:type="AxEdtInt">
+	<Name>ResThresholdDays</Name>
+	<HelpText>@ResReservation:ResThresholdDays_Help</HelpText>
+	<Label>@ResReservation:ResThresholdDays</Label>
+	<ArrayElements />
+	<Relations />
+	<TableReferences />
+</AxEdt>

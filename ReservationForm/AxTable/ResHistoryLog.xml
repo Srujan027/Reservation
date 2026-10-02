@@ -1,0 +1,278 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxTable xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResHistoryLog</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+public class ResHistoryLog extends common
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>consumedForSupplyRef</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Net quantity already consumed against one exact supply record (a
+    /// PurchLine/ProdTable/InventTransferLine RecId), across every demand
+    /// line that has ever drawn from it -- sum of logged Reserve qty minus
+    /// sum of logged Unreserve qty for that supply reference.
+    /// </summary>
+    /// <remarks>
+    /// This is the authoritative source for netting Purchase/Production/
+    /// TransferInTransit availability in <c>ResSupplyProvider</c>, in place of
+    /// inferring it from <c>InventTrans.InventDimId</c>: the standard WHS
+    /// reservation hierarchy is not guaranteed to land an ordered reservation
+    /// on the exact dimension it was offered (it can resolve to a different
+    /// concrete batch/bin satisfying the same relaxed criteria), so querying
+    /// by dimension can both miss the real reservation and, worse, misattribute
+    /// it to an unrelated receipt line that happens to share that dimension.
+    /// Our own audit trail has no such ambiguity: <c>commitReservation</c> and
+    /// <c>unreserveLine</c> record the exact supply RecId they acted on.
+    /// </remarks>
+    public static Qty consumedForSupplyRef(RefTableId _supplyRefTableId, RefRecId _supplyRefRecId)
+    {
+        ResHistoryLog   historyLog;
+        Qty             reserved;
+        Qty             released;
+
+        if (!_supplyRefRecId)
+        {
+            return 0;
+        }
+
+        select sum(QtyAffected) from historyLog
+            where historyLog.SupplyRefTableId == _supplyRefTableId
+            &&    historyLog.SupplyRefRecId   == _supplyRefRecId
+            &&    historyLog.Action           == ResAction::Reserve;
+        reserved = historyLog.QtyAffected;
+
+        select sum(QtyAffected) from historyLog
+            where historyLog.SupplyRefTableId == _supplyRefTableId
+            &&    historyLog.SupplyRefRecId   == _supplyRefRecId
+            &&    historyLog.Action           == ResAction::Unreserve;
+        released = historyLog.QtyAffected;
+
+        return reserved - released;
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+	<Label>@ResReservation:ResHistoryLog</Label>
+	<TableGroup>Transaction</TableGroup>
+	<TitleField1>OrderId</TitleField1>
+	<TitleField2>Action</TitleField2>
+	<AllowRowVersionChangeTracking>Yes</AllowRowVersionChangeTracking>
+	<CreatedBy>Yes</CreatedBy>
+	<CreatedDateTime>Yes</CreatedDateTime>
+	<DeleteActions />
+	<FieldGroups>
+		<AxTableFieldGroup>
+			<Name>AutoLookup</Name>
+			<Fields>
+				<AxTableFieldGroupField>
+					<DataField>OrderType</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>OrderId</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>Action</DataField>
+				</AxTableFieldGroupField>
+			</Fields>
+		</AxTableFieldGroup>
+		<AxTableFieldGroup>
+			<Name>AutoIdentification</Name>
+			<AutoPopulate>Yes</AutoPopulate>
+			<Fields />
+		</AxTableFieldGroup>
+		<AxTableFieldGroup>
+			<Name>AutoSummary</Name>
+			<Fields />
+		</AxTableFieldGroup>
+		<AxTableFieldGroup>
+			<Name>AutoBrowse</Name>
+			<Fields />
+		</AxTableFieldGroup>
+		<AxTableFieldGroup>
+			<Name>AllFields</Name>
+			<Label>@SYS80094</Label>
+			<Fields>
+				<AxTableFieldGroupField>
+					<DataField>TransactionId</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>OrderType</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>OrderId</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>LineNum</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>Action</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>QtyAffected</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>BatchId</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>RuleApplied</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>ReasonCode</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>Comment</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>SupplyRefTableId</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>SupplyRefRecId</DataField>
+				</AxTableFieldGroupField>
+			</Fields>
+		</AxTableFieldGroup>
+	</FieldGroups>
+	<Fields>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldInt64">
+			<Name>TransactionId</Name>
+			<ExtendedDataType>ResTransactionId</ExtendedDataType>
+			<Label>@ResReservation:ResTransactionId</Label>
+			<Mandatory>Yes</Mandatory>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldEnum">
+			<Name>OrderType</Name>
+			<EnumType>ResOrderType</EnumType>
+			<Label>@ResReservation:ResOrderType</Label>
+			<Mandatory>Yes</Mandatory>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldString">
+			<Name>OrderId</Name>
+			<ExtendedDataType>InventTransRefId</ExtendedDataType>
+			<Mandatory>Yes</Mandatory>
+			<Label>@ResReservation:ResHistoryLog_OrderId</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldReal">
+			<Name>LineNum</Name>
+			<ExtendedDataType>LineNum</ExtendedDataType>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldEnum">
+			<Name>Action</Name>
+			<EnumType>ResAction</EnumType>
+			<Label>@ResReservation:ResAction</Label>
+			<Mandatory>Yes</Mandatory>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldReal">
+			<Name>QtyAffected</Name>
+			<ExtendedDataType>Qty</ExtendedDataType>
+			<Label>@ResReservation:ResHistoryLog_QtyAffected</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldString">
+			<Name>BatchId</Name>
+			<ExtendedDataType>InventBatchId</ExtendedDataType>
+			<IgnoreEDTRelation>Yes</IgnoreEDTRelation>
+			<Label>@ResReservation:ResHistoryLog_BatchId</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldString">
+			<Name>RuleApplied</Name>
+			<ExtendedDataType>ResRuleAppliedTxt</ExtendedDataType>
+			<Label>@ResReservation:ResHistoryLog_RuleApplied</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldString">
+			<Name>ReasonCode</Name>
+			<ExtendedDataType>ResReasonCodeId</ExtendedDataType>
+			<Label>@ResReservation:ResHistoryLog_ReasonCode</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldString">
+			<Name>Comment</Name>
+			<ExtendedDataType>ResCommentTxt</ExtendedDataType>
+			<Label>@ResReservation:ResHistoryLog_Comment</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldInt">
+			<Name>SupplyRefTableId</Name>
+			<ExtendedDataType>RefTableId</ExtendedDataType>
+			<Label>@ResReservation:ResHistoryLog_SupplyRefTableId</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldInt64">
+			<Name>SupplyRefRecId</Name>
+			<ExtendedDataType>RefRecId</ExtendedDataType>
+			<Label>@ResReservation:ResHistoryLog_SupplyRefRecId</Label>
+		</AxTableField>
+	</Fields>
+	<FullTextIndexes />
+	<Indexes>
+		<AxTableIndex>
+			<Name>TransactionIdx</Name>
+			<AllowDuplicates>Yes</AllowDuplicates>
+			<Fields>
+				<AxTableIndexField>
+					<DataField>TransactionId</DataField>
+				</AxTableIndexField>
+			</Fields>
+		</AxTableIndex>
+		<AxTableIndex>
+			<Name>OrderIdx</Name>
+			<AllowDuplicates>Yes</AllowDuplicates>
+			<Fields>
+				<AxTableIndexField>
+					<DataField>OrderType</DataField>
+				</AxTableIndexField>
+				<AxTableIndexField>
+					<DataField>OrderId</DataField>
+				</AxTableIndexField>
+				<AxTableIndexField>
+					<DataField>LineNum</DataField>
+				</AxTableIndexField>
+			</Fields>
+		</AxTableIndex>
+		<AxTableIndex>
+			<Name>SupplyRefIdx</Name>
+			<AllowDuplicates>Yes</AllowDuplicates>
+			<Fields>
+				<AxTableIndexField>
+					<DataField>SupplyRefTableId</DataField>
+				</AxTableIndexField>
+				<AxTableIndexField>
+					<DataField>SupplyRefRecId</DataField>
+				</AxTableIndexField>
+			</Fields>
+		</AxTableIndex>
+	</Indexes>
+	<Mappings />
+	<Relations>
+		<AxTableRelation>
+			<Name>ReasonCode</Name>
+			<Cardinality>ZeroMore</Cardinality>
+			<OnDelete>Restricted</OnDelete>
+			<RelatedTable>ResReasonCode</RelatedTable>
+			<RelatedTableCardinality>ExactlyOne</RelatedTableCardinality>
+			<RelationshipType>Association</RelationshipType>
+			<Constraints>
+				<AxTableRelationConstraint xmlns=""
+					i:type="AxTableRelationConstraintField">
+					<Name>ReasonCode</Name>
+					<Field>ReasonCode</Field>
+					<RelatedField>ReasonCode</RelatedField>
+				</AxTableRelationConstraint>
+			</Constraints>
+		</AxTableRelation>
+	</Relations>
+	<StateMachines />
+</AxTable>

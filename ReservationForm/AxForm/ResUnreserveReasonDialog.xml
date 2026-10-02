@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxForm xmlns:i="http://www.w3.org/2001/XMLSchema-instance" xmlns="Microsoft.Dynamics.AX.Metadata.V6">
+	<Name>ResUnreserveReasonDialog</Name>
+	<SourceCode>
+		<Methods xmlns="">
+			<Method>
+				<Name>classDeclaration</Name>
+				<Source><![CDATA[
+[Form]
+public class ResUnreserveReasonDialog extends FormRun
+{
+}
+]]></Source>
+			</Method>
+		</Methods>
+		<DataSources xmlns="">
+			</DataSources>
+			<DataControls xmlns="">
+				<Control>
+					<Name>ReasonGroup_ReasonCode</Name>
+					<Type>String</Type>
+					<Methods>
+						<Method>
+							<Name>lookup</Name>
+							<Source><![CDATA[
+        /// <summary>
+        /// This field is unbound (no live ResReasonCode datasource on this
+        /// dialog -- there is nothing here for a user to edit the catalog
+        /// through, only to pick a code from it), so it needs its own lookup
+        /// rather than relying on an EDT-level relation.
+        /// </summary>
+        public void lookup()
+        {
+            Query                query;
+            QueryBuildDataSource qbds;
+            SysTableLookup       sysTableLookup = SysTableLookup::newParameters(tableNum(ResReasonCode), this);
+
+            sysTableLookup.addLookupfield(fieldNum(ResReasonCode, ReasonCode));
+            sysTableLookup.addLookupfield(fieldNum(ResReasonCode, Description));
+
+            query = new Query();
+            qbds  = query.addDataSource(tableNum(ResReasonCode));
+
+            sysTableLookup.parmQuery(query);
+            sysTableLookup.performFormLookup();
+        }
+
+]]></Source>
+						</Method>
+					</Methods>
+				</Control>
+				<Control>
+					<Name>CommentField</Name>
+					<Type>String</Type>
+					<Methods />
+				</Control>
+				<Control>
+					<Name>OkButton</Name>
+					<Type>Button</Type>
+					<Methods>
+						<Method>
+							<Name>clicked</Name>
+							<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            if (!ReasonGroup_ReasonCode.text() || !ResReasonCode::exist(ReasonGroup_ReasonCode.text()))
+            {
+                warning("@ResReservation:ResUnreserveReasonDialog_ReasonRequired");
+                return;
+            }
+
+            element.args().parmObject(new ContainerClass([ReasonGroup_ReasonCode.text(), CommentField.text()]));
+            element.closeOk();
+        }
+
+]]></Source>
+						</Method>
+					</Methods>
+				</Control>
+				<Control>
+					<Name>CancelButton</Name>
+					<Type>Button</Type>
+					<Methods>
+						<Method>
+							<Name>clicked</Name>
+							<Source><![CDATA[
+        public void clicked()
+        {
+            super();
+
+            element.closeCancel();
+        }
+
+]]></Source>
+						</Method>
+					</Methods>
+				</Control>
+			</DataControls>
+			<Members xmlns="" />
+	</SourceCode>
+	<DataSources />
+	<Design>
+		<Caption xmlns="">@ResReservation:ResUnreserveReasonDialog</Caption>
+		<Pattern xmlns="">Custom</Pattern>
+		<ShowDeleteButton xmlns="">No</ShowDeleteButton>
+		<ShowNewButton xmlns="">No</ShowNewButton>
+		<ViewEditMode xmlns="">Edit</ViewEditMode>
+		<Controls xmlns="">
+			<AxFormControl xmlns=""
+				i:type="AxFormGroupControl">
+				<Name>ReasonGroup</Name>
+				<Type>Group</Type>
+				<FormControlExtension
+					i:nil="true" />
+				<Controls>
+					<AxFormControl xmlns=""
+						i:type="AxFormStringControl">
+						<Name>ReasonGroup_ReasonCode</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>String</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<ExtendedDataType>ResReasonCodeId</ExtendedDataType>
+						<Label>@ResReservation:ResReasonCodeId</Label>
+						<Mandatory>Yes</Mandatory>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormStringControl">
+						<Name>CommentField</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>String</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<ExtendedDataType>ResCommentTxt</ExtendedDataType>
+						<Label>@ResReservation:ResUnreserveReasonDialog_Comment</Label>
+						<MultiLine>Yes</MultiLine>
+					</AxFormControl>
+				</Controls>
+				<ArrangeMethod>Vertical</ArrangeMethod>
+				<Caption>@ResReservation:ResUnreserveReasonDialog</Caption>
+			</AxFormControl>
+			<AxFormControl xmlns=""
+				i:type="AxFormGroupControl">
+				<Name>ButtonGroup</Name>
+				<Type>Group</Type>
+				<FormControlExtension
+					i:nil="true" />
+				<Controls>
+					<AxFormControl xmlns=""
+						i:type="AxFormButtonControl">
+						<Name>OkButton</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>Button</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Text>@ResReservation:ResUnreserveReasonDialog_Ok</Text>
+					</AxFormControl>
+					<AxFormControl xmlns=""
+						i:type="AxFormButtonControl">
+						<Name>CancelButton</Name>
+						<AutoDeclaration>Yes</AutoDeclaration>
+						<Type>Button</Type>
+						<FormControlExtension
+							i:nil="true" />
+						<Text>@ResReservation:ResUnreserveReasonDialog_Cancel</Text>
+					</AxFormControl>
+				</Controls>
+				<ArrangeMethod>HorizontalRight</ArrangeMethod>
+			</AxFormControl>
+		</Controls>
+	</Design>
+	<Parts />
+</AxForm>

@@ -1,0 +1,327 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="14.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <BuildTasksDirectory Condition=" '$(BuildTasksDirectory)' == ''">$(MSBuildProgramFiles32)\MSBuild\Microsoft\Dynamics\AX</BuildTasksDirectory>
+    <Model>ReservationForm</Model>
+    <TargetFrameworkVersion>v4.6</TargetFrameworkVersion>
+    <OutputPath>bin</OutputPath>
+    <SchemaVersion>2.0</SchemaVersion>
+    <GenerateCrossReferences>True</GenerateCrossReferences>
+    <RunAppCheckerRules>False</RunAppCheckerRules>
+    <LogAppcheckerDiagsAsErrors>False</LogAppcheckerDiagsAsErrors>
+    <DeployOnline>False</DeployOnline>
+    <ProjectGuid>{40796bda-9391-4367-aebf-c015d5ab2be1}</ProjectGuid>
+    <Name>ReservationForm</Name>
+    <RootNamespace>ReservationForm</RootNamespace>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|AnyCPU'">
+    <Configuration>Debug</Configuration>
+    <DBSyncInBuild>False</DBSyncInBuild>
+    <GenerateFormAdaptors>False</GenerateFormAdaptors>
+    <Company>
+    </Company>
+    <Partition>initial</Partition>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DataEntityExpandParentChildRelations>False</DataEntityExpandParentChildRelations>
+    <DataEntityUseLabelTextAsFieldName>False</DataEntityUseLabelTextAsFieldName>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <DebugSymbols>true</DebugSymbols>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+  </PropertyGroup>
+  <ItemGroup>
+    <Folder Include="Base Enums\" />
+    <Folder Include="EDTs\" />
+    <Folder Include="Tables\" />
+    <Folder Include="Classes\" />
+    <Folder Include="Security Duties\" />
+    <Folder Include="Security Privileges\" />
+    <Folder Include="Security Roles\" />
+    <Folder Include="Display Menu Items\" />
+    <Folder Include="Menu Extensions\" />
+    <Folder Include="Forms\" />
+    <Folder Include="Label Files\" />
+    <Folder Include="Tests\" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="AxEdt\ResCommentTxt">
+      <SubType>Content</SubType>
+      <Name>ResCommentTxt</Name>
+      <Link>EDTs\ResCommentTxt</Link>
+    </Content>
+    <Content Include="AxEnum\ResOrderType">
+      <SubType>Content</SubType>
+      <Name>ResOrderType</Name>
+      <Link>Base Enums\ResOrderType</Link>
+    </Content>
+    <Content Include="AxEnum\ResOrderTypeFilter">
+      <SubType>Content</SubType>
+      <Name>ResOrderTypeFilter</Name>
+      <Link>Base Enums\ResOrderTypeFilter</Link>
+    </Content>
+    <Content Include="AxEnum\ResAction">
+      <SubType>Content</SubType>
+      <Name>ResAction</Name>
+      <Link>Base Enums\ResAction</Link>
+    </Content>
+    <Content Include="AxEnum\ResAllocationMethod">
+      <SubType>Content</SubType>
+      <Name>ResAllocationMethod</Name>
+      <Link>Base Enums\ResAllocationMethod</Link>
+    </Content>
+    <Content Include="AxEnum\ResRiskIndicator">
+      <SubType>Content</SubType>
+      <Name>ResRiskIndicator</Name>
+      <Link>Base Enums\ResRiskIndicator</Link>
+    </Content>
+    <Content Include="AxEnum\ResReservationStatus">
+      <SubType>Content</SubType>
+      <Name>ResReservationStatus</Name>
+      <Link>Base Enums\ResReservationStatus</Link>
+    </Content>
+    <Content Include="AxEnum\ResSupplyType">
+      <SubType>Content</SubType>
+      <Name>ResSupplyType</Name>
+      <Link>Base Enums\ResSupplyType</Link>
+    </Content>
+    <Content Include="AxEdt\ResPriorityTier">
+      <SubType>Content</SubType>
+      <Name>ResPriorityTier</Name>
+      <Link>EDTs\ResPriorityTier</Link>
+    </Content>
+    <Content Include="AxEdt\ResReasonCodeId">
+      <SubType>Content</SubType>
+      <Name>ResReasonCodeId</Name>
+      <Link>EDTs\ResReasonCodeId</Link>
+    </Content>
+    <Content Include="AxEdt\ResRuleAppliedTxt">
+      <SubType>Content</SubType>
+      <Name>ResRuleAppliedTxt</Name>
+      <Link>EDTs\ResRuleAppliedTxt</Link>
+    </Content>
+    <Content Include="AxEdt\ResFillPercentage">
+      <SubType>Content</SubType>
+      <Name>ResFillPercentage</Name>
+      <Link>EDTs\ResFillPercentage</Link>
+    </Content>
+    <Content Include="AxEdt\ResThresholdDays">
+      <SubType>Content</SubType>
+      <Name>ResThresholdDays</Name>
+      <Link>EDTs\ResThresholdDays</Link>
+    </Content>
+    <Content Include="AxEdt\ResTransactionId">
+      <SubType>Content</SubType>
+      <Name>ResTransactionId</Name>
+      <Link>EDTs\ResTransactionId</Link>
+    </Content>
+    <Content Include="AxTable\ResPriorityRule">
+      <SubType>Content</SubType>
+      <Name>ResPriorityRule</Name>
+      <Link>Tables\ResPriorityRule</Link>
+    </Content>
+    <Content Include="AxTable\ResAllocationRule">
+      <SubType>Content</SubType>
+      <Name>ResAllocationRule</Name>
+      <Link>Tables\ResAllocationRule</Link>
+    </Content>
+    <Content Include="AxTable\ResDeliveryPolicy">
+      <SubType>Content</SubType>
+      <Name>ResDeliveryPolicy</Name>
+      <Link>Tables\ResDeliveryPolicy</Link>
+    </Content>
+    <Content Include="AxTable\ResOrderTypePolicy">
+      <SubType>Content</SubType>
+      <Name>ResOrderTypePolicy</Name>
+      <Link>Tables\ResOrderTypePolicy</Link>
+    </Content>
+    <Content Include="AxTable\ResReasonCode">
+      <SubType>Content</SubType>
+      <Name>ResReasonCode</Name>
+      <Link>Tables\ResReasonCode</Link>
+    </Content>
+    <Content Include="AxTable\ResRiskThreshold">
+      <SubType>Content</SubType>
+      <Name>ResRiskThreshold</Name>
+      <Link>Tables\ResRiskThreshold</Link>
+    </Content>
+    <Content Include="AxTable\ResHistoryLog">
+      <SubType>Content</SubType>
+      <Name>ResHistoryLog</Name>
+      <Link>Tables\ResHistoryLog</Link>
+    </Content>
+    <Content Include="AxTable\ResDemandLineTmp">
+      <SubType>Content</SubType>
+      <Name>ResDemandLineTmp</Name>
+      <Link>Tables\ResDemandLineTmp</Link>
+    </Content>
+    <Content Include="AxTable\ResSupplyLineTmp">
+      <SubType>Content</SubType>
+      <Name>ResSupplyLineTmp</Name>
+      <Link>Tables\ResSupplyLineTmp</Link>
+    </Content>
+    <Content Include="AxClass\ResSetupRules">
+      <SubType>Content</SubType>
+      <Name>ResSetupRules</Name>
+      <Link>Classes\ResSetupRules</Link>
+    </Content>
+    <Content Include="AxClass\ResHistoryLogger">
+      <SubType>Content</SubType>
+      <Name>ResHistoryLogger</Name>
+      <Link>Classes\ResHistoryLogger</Link>
+    </Content>
+    <Content Include="AxClass\ResDemandProvider">
+      <SubType>Content</SubType>
+      <Name>ResDemandProvider</Name>
+      <Link>Classes\ResDemandProvider</Link>
+    </Content>
+    <Content Include="AxClass\ResSupplyProvider">
+      <SubType>Content</SubType>
+      <Name>ResSupplyProvider</Name>
+      <Link>Classes\ResSupplyProvider</Link>
+    </Content>
+    <Content Include="AxClass\ResReservationEngine">
+      <SubType>Content</SubType>
+      <Name>ResReservationEngine</Name>
+      <Link>Classes\ResReservationEngine</Link>
+    </Content>
+    <Content Include="AxSecurityDuty\ResReservationView">
+      <SubType>Content</SubType>
+      <Name>ResReservationView</Name>
+      <Link>Security Duties\ResReservationView</Link>
+    </Content>
+    <Content Include="AxSecurityDuty\ResReservationExecute">
+      <SubType>Content</SubType>
+      <Name>ResReservationExecute</Name>
+      <Link>Security Duties\ResReservationExecute</Link>
+    </Content>
+    <Content Include="AxSecurityDuty\ResReservationAdminister">
+      <SubType>Content</SubType>
+      <Name>ResReservationAdminister</Name>
+      <Link>Security Duties\ResReservationAdminister</Link>
+    </Content>
+    <Content Include="AxSecurityPrivilege\ResReservationScreen_DM_View">
+      <SubType>Content</SubType>
+      <Name>ResReservationScreen_DM_View</Name>
+      <Link>Security Privileges\ResReservationScreen_DM_View</Link>
+    </Content>
+    <Content Include="AxSecurityPrivilege\ResReservationScreen_AM_Execute">
+      <SubType>Content</SubType>
+      <Name>ResReservationScreen_AM_Execute</Name>
+      <Link>Security Privileges\ResReservationScreen_AM_Execute</Link>
+    </Content>
+    <Content Include="AxSecurityPrivilege\ResSetupDialog_AM_Maintain">
+      <SubType>Content</SubType>
+      <Name>ResSetupDialog_AM_Maintain</Name>
+      <Link>Security Privileges\ResSetupDialog_AM_Maintain</Link>
+    </Content>
+    <Content Include="AxSecurityRole\ResReservationManagerRole">
+      <SubType>Content</SubType>
+      <Name>ResReservationManagerRole</Name>
+      <Link>Security Roles\ResReservationManagerRole</Link>
+    </Content>
+    <Content Include="AxSecurityRole\ResReservationAdministratorRole">
+      <SubType>Content</SubType>
+      <Name>ResReservationAdministratorRole</Name>
+      <Link>Security Roles\ResReservationAdministratorRole</Link>
+    </Content>
+    <Content Include="AxMenuItemDisplay\ResReservationScreen">
+      <SubType>Content</SubType>
+      <Name>ResReservationScreen</Name>
+      <Link>Display Menu Items\ResReservationScreen</Link>
+    </Content>
+    <Content Include="AxMenuItemDisplay\ResSetupDialog">
+      <SubType>Content</SubType>
+      <Name>ResSetupDialog</Name>
+      <Link>Display Menu Items\ResSetupDialog</Link>
+    </Content>
+    <Content Include="AxMenuExtension\InventoryManagement.Reservation">
+      <SubType>Content</SubType>
+      <Name>InventoryManagement.Reservation</Name>
+      <Link>Menu Extensions\InventoryManagement.Reservation</Link>
+    </Content>
+    <Content Include="AxForm\ResReservationScreen">
+      <SubType>Content</SubType>
+      <Name>ResReservationScreen</Name>
+      <Link>Forms\ResReservationScreen</Link>
+    </Content>
+    <Content Include="AxForm\ResSetupDialog">
+      <SubType>Content</SubType>
+      <Name>ResSetupDialog</Name>
+      <Link>Forms\ResSetupDialog</Link>
+    </Content>
+    <Content Include="AxForm\ResUnreserveReasonDialog">
+      <SubType>Content</SubType>
+      <Name>ResUnreserveReasonDialog</Name>
+      <Link>Forms\ResUnreserveReasonDialog</Link>
+    </Content>
+    <Content Include="AxLabelFile\ResReservation_EN-US">
+      <SubType>Content</SubType>
+      <Name>ResReservation_EN-US</Name>
+      <Link>Label Files\ResReservation_EN-US</Link>
+    </Content>
+    <Content Include="ResReservation.EN-US.label.txt">
+      <SubType>Content</SubType>
+      <Name>ResReservation.EN-US.label.txt</Name>
+      <DependentUpon>AxLabelFile\ResReservation_EN-US</DependentUpon>
+    </Content>
+    <Content Include="AxClass\Res_TestDataBuilder">
+      <SubType>Content</SubType>
+      <Name>Res_TestDataBuilder</Name>
+      <Link>Tests\Res_TestDataBuilder</Link>
+    </Content>
+    <Content Include="AxClass\Res_Test_PrioritySequencing">
+      <SubType>Content</SubType>
+      <Name>Res_Test_PrioritySequencing</Name>
+      <Link>Tests\Res_Test_PrioritySequencing</Link>
+    </Content>
+    <Content Include="AxClass\Res_Test_AllocationMethod">
+      <SubType>Content</SubType>
+      <Name>Res_Test_AllocationMethod</Name>
+      <Link>Tests\Res_Test_AllocationMethod</Link>
+    </Content>
+    <Content Include="AxClass\Res_Test_MixedBatchPartialDelivery">
+      <SubType>Content</SubType>
+      <Name>Res_Test_MixedBatchPartialDelivery</Name>
+      <Link>Tests\Res_Test_MixedBatchPartialDelivery</Link>
+    </Content>
+    <Content Include="AxClass\Res_Test_SupplyConsumptionSequencing">
+      <SubType>Content</SubType>
+      <Name>Res_Test_SupplyConsumptionSequencing</Name>
+      <Link>Tests\Res_Test_SupplyConsumptionSequencing</Link>
+    </Content>
+    <Content Include="AxClass\Res_Test_Unreserve">
+      <SubType>Content</SubType>
+      <Name>Res_Test_Unreserve</Name>
+      <Link>Tests\Res_Test_Unreserve</Link>
+    </Content>
+    <Content Include="AxClass\Res_Test_RiskIndicator">
+      <SubType>Content</SubType>
+      <Name>Res_Test_RiskIndicator</Name>
+      <Link>Tests\Res_Test_RiskIndicator</Link>
+    </Content>
+    <Content Include="AxClass\Res_Test_HistoryAudit">
+      <SubType>Content</SubType>
+      <Name>Res_Test_HistoryAudit</Name>
+      <Link>Tests\Res_Test_HistoryAudit</Link>
+    </Content>
+    <Content Include="AxClass\Res_Test_SetupValidation">
+      <SubType>Content</SubType>
+      <Name>Res_Test_SetupValidation</Name>
+      <Link>Tests\Res_Test_SetupValidation</Link>
+    </Content>
+    <Content Include="AxClass\Res_Test_Security">
+      <SubType>Content</SubType>
+      <Name>Res_Test_Security</Name>
+      <Link>Tests\Res_Test_Security</Link>
+    </Content>
+    <Content Include="AxClass\Res_Test_EdgeCases">
+      <SubType>Content</SubType>
+      <Name>Res_Test_EdgeCases</Name>
+      <Link>Tests\Res_Test_EdgeCases</Link>
+    </Content>
+  </ItemGroup>
+  <Import Project="$(MSBuildBinPath)\Microsoft.Common.targets" />
+  <Import Project="$(BuildTasksDirectory)\Microsoft.Dynamics.Framework.Tools.BuildTasks.17.0.targets" />
+</Project>

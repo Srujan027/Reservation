@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_Test_MixedBatchPartialDelivery</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// FDD section 7 -- mixed batch and partial delivery policy, for both Sales
+/// (<c>ResDeliveryPolicy</c>) and Transfer (<c>ResOrderTypePolicy</c>) demand.
+/// </summary>
+[SysTestCaseAutomaticNumberSequences]
+public class Res_Test_MixedBatchPartialDelivery extends SysTestCase
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>reserveWholeDemand</Name>
+				<Source><![CDATA[
+    private ResReservationEngine reserveWholeDemand(ItemId _itemId)
+    {
+        ResDemandLineTmp    demandTmp;
+        ResDemandLineTmp    demandLine;
+        container           recIds;
+        ResReservationEngine engine;
+
+        ResDemandProvider::run(demandTmp, '', '', _itemId, dateNull(), dateNull());
+
+        demandLine.setTmpData(demandTmp);
+        while select demandLine
+        {
+            recIds += demandLine.RecId;
+        }
+
+        engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, recIds);
+
+        return engine;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reservationStatusFor</Name>
+				<Source><![CDATA[
+    private ResReservationStatus reservationStatusFor(ItemId _itemId, InventTransRefId _orderId)
+    {
+        ResDemandLineTmp demandTmp, demandLine;
+
+        ResDemandProvider::run(demandTmp, '', '', _itemId, dateNull(), dateNull());
+        demandLine.setTmpData(demandTmp);
+
+        select firstonly demandLine where demandLine.OrderId == _orderId;
+
+        return demandLine.ReservationStatus;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>noMixedBatchTakesLargestSingleBatch</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// KNOWN MISMATCH: with <c>AllowMixedBatch = No</c> and no single batch
+    /// covering the full open qty, the FDD calls for the engine to reserve
+    /// the *largest* available single batch. The actual implementation
+    /// (<c>ResReservationEngine.reserveLine</c>, Pass 1) instead takes
+    /// whichever batch sorts first under the item's FEFO/FIFO order and caps
+    /// at that batch's own qty -- it never compares batch sizes. This test
+    /// deliberately makes the FEFO-earliest batch the *smallest* one, so it
+    /// is expected to FAIL against the current code (which allocates from
+    /// the small, earliest-expiry batch rather than the large, later one).
+    /// </summary>
+    [SysTestMethod]
+    public void noMixedBatchTakesLargestSingleBatch()
+    {
+        const ItemId    itemId      = 'RMB01';
+        InventTable     item        = Res_TestDataBuilder::batchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        var smallEarlyBatch = Res_TestDataBuilder::createBatch(item, today + 5);  // FEFO picks this first...
+        var largeLateBatch  = Res_TestDataBuilder::createBatch(item, today + 60); // ...but this is the one that could actually fill the order.
+
+        Res_TestDataBuilder::setAllocationRule(itemId, ResAllocationMethod::FEFO, 0, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RMB01CU', NoYes::Yes, NoYes::No); // partial allowed, mixed batch NOT allowed
+        Res_TestDataBuilder::addOnHand(item, [warehouse, smallEarlyBatch], 3);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, largeLateBatch], 20);
+
+        Res_TestDataBuilder::salesLine(item, 'RMB01CU', warehouse, 20, today + 10);
+
+        var engine = this.reserveWholeDemand(itemId);
+
+        ResSupplyLineTmp supplyTmp, largeLine;
+        ResSupplyProvider::run(supplyTmp, [itemId], '', warehouse.InventLocationId);
+        largeLine.setTmpData(supplyTmp);
+        select firstonly largeLine where largeLine.BatchId == largeLateBatch.inventBatchId;
+
+        this.assertTrue(largeLine.QtyReserved == 20,
+            'Expected the engine to reserve from the larger batch (20 available, covers the full order) ' +
+            'rather than the smaller, earlier-expiry batch (3 available) when mixing batches is not allowed.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>mixedBatchSplitsAcrossBatches</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void mixedBatchSplitsAcrossBatches()
+    {
+        const ItemId    itemId      = 'RMB02';
+        InventTable     item        = Res_TestDataBuilder::batchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        var batch1 = Res_TestDataBuilder::createBatch(item, today + 5);
+        var batch2 = Res_TestDataBuilder::createBatch(item, today + 60);
+
+        Res_TestDataBuilder::setAllocationRule(itemId, ResAllocationMethod::FEFO, 0, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RMB02CU', NoYes::Yes, NoYes::Yes); // partial + mixed batch both allowed
+        Res_TestDataBuilder::addOnHand(item, [warehouse, batch1], 6);
+        Res_TestDataBuilder::addOnHand(item, [warehouse, batch2], 20);
+
+        Res_TestDataBuilder::salesLine(item, 'RMB02CU', warehouse, 20, today + 10);
+
+        this.reserveWholeDemand(itemId);
+
+        ResSupplyLineTmp supplyTmp, line1, line2;
+        ResSupplyProvider::run(supplyTmp, [itemId], '', warehouse.InventLocationId);
+        line1.setTmpData(supplyTmp);
+        line2.setTmpData(supplyTmp);
+        select firstonly line1 where line1.BatchId == batch1.inventBatchId;
+        select firstonly line2 where line2.BatchId == batch2.inventBatchId;
+
+        this.assertTrue(line1.QtyReserved == 6, 'Expected the first (earliest-expiry) batch to be fully consumed.');
+        this.assertTrue(line2.QtyReserved == 14, 'Expected the remaining 14 units to be split onto the second batch.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>noPartialDeliverySkipsEntirely</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void noPartialDeliverySkipsEntirely()
+    {
+        const ItemId    itemId      = 'RMB03';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setDeliveryPolicy('RMB03CU', NoYes::No, NoYes::Yes); // partial NOT allowed
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 5); // less than the 20 requested
+
+        var salesLine = Res_TestDataBuilder::salesLine(item, 'RMB03CU', warehouse, 20, today + 10);
+
+        var engine = this.reserveWholeDemand(itemId);
+
+        this.assertTrue(engine.parmLinesSkipped() == 1, 'Line should be skipped entirely, not partially reserved.');
+        this.assertTrue(engine.parmLinesPartiallyReserved() == 0, 'No partial reservation should have been committed.');
+
+        ResHistoryLog log;
+        select firstonly log where log.Action == ResAction::Skip && log.OrderId == salesLine.SalesId;
+        this.assertTrue(log.RecId != 0, 'A Skip row should be logged.');
+        this.assertTrue(log.RuleApplied == "@ResReservation:ResReservationEngine_PartialNotAllowed",
+            'Skip reason should be the "partial not permitted" label.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>partialDeliveryCommitsPartialWithStatus</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void partialDeliveryCommitsPartialWithStatus()
+    {
+        const ItemId    itemId      = 'RMB04';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setDeliveryPolicy('RMB04CU', NoYes::Yes, NoYes::Yes); // partial allowed
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 5);
+
+        var salesLine = Res_TestDataBuilder::salesLine(item, 'RMB04CU', warehouse, 20, today + 10);
+
+        var engine = this.reserveWholeDemand(itemId);
+
+        this.assertTrue(engine.parmLinesPartiallyReserved() == 1, 'Expected exactly one partial reservation.');
+        this.assertTrue(this.reservationStatusFor(itemId, salesLine.SalesId) == ResReservationStatus::Partial,
+            'Reservation Status should read Partial after a partial commit.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>transferAllowPartialAppliesIndependentlyOfSalesDeliveryPolicy</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Transfer demand never consults <c>ResDeliveryPolicy</c> at all (it has
+    /// no <c>CustAccount</c>) -- partial/mixed-batch behavior for Transfer
+    /// lines comes solely from <c>ResOrderTypePolicy</c>. This proves a
+    /// Sales-side "allow partial" setting has zero effect on a Transfer
+    /// line's skip-on-insufficient-supply behavior.
+    /// </summary>
+    /// <remarks>
+    /// Note also: <c>ResOrderTypePolicy</c> has no "allow mixed batch"
+    /// equivalent for Transfer at all -- <c>ResReservationEngine.reserveLine</c>
+    /// hardcodes <c>allowMixedBatch = NoYes::Yes</c> for every Transfer line,
+    /// unconditionally. There is no way to configure a Transfer-only
+    /// no-mixed-batch policy the way Tab 3 lets you for Sales.
+    /// </remarks>
+    [SysTestMethod]
+    public void transferAllowPartialAppliesIndependentlyOfSalesDeliveryPolicy()
+    {
+        const ItemId    itemId      = 'RMB05';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  fromWh      = Res_TestDataBuilder::issuingWarehouse();
+        InventLocation  toWh        = Res_TestDataBuilder::receivingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        // A Sales delivery policy that allows partial -- should be irrelevant to the Transfer line below.
+        Res_TestDataBuilder::setDeliveryPolicy('RMB05CU', NoYes::Yes, NoYes::Yes);
+        Res_TestDataBuilder::setOrderTypePolicy(NoYes::No, NoYes::No); // TransferAllowPartial = No
+
+        Res_TestDataBuilder::addOnHand(item, [fromWh], 5); // less than the 20 requested
+
+        var transferLine = Res_TestDataBuilder::transferLine(item, fromWh, toWh, 20, today + 10);
+
+        var engine = this.reserveWholeDemand(itemId);
+
+        this.assertTrue(engine.parmLinesSkipped() == 1,
+            'TransferAllowPartial = No should skip the under-supplied Transfer line entirely, ' +
+            'regardless of the unrelated Sales customer AllowPartialDelivery = Yes setting.');
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

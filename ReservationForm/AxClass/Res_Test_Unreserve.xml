@@ -1,0 +1,180 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_Test_Unreserve</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// FDD section 7 -- Unreserve.
+/// </summary>
+[SysTestCaseAutomaticNumberSequences]
+public class Res_Test_Unreserve extends SysTestCase
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>reserveWholeDemandAndReturnBuffer</Name>
+				<Source><![CDATA[
+    private ResDemandLineTmp reserveWholeDemandAndReturnBuffer(ItemId _itemId)
+    {
+        ResDemandLineTmp    demandTmp;
+        ResDemandLineTmp    demandLine;
+        container           recIds;
+        ResReservationEngine engine;
+
+        ResDemandProvider::run(demandTmp, '', '', _itemId, dateNull(), dateNull());
+
+        demandLine.setTmpData(demandTmp);
+        while select demandLine
+        {
+            recIds += demandLine.RecId;
+        }
+
+        engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, recIds);
+
+        return demandTmp;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>unreserveBlockedWithoutReasonCode</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void unreserveBlockedWithoutReasonCode()
+    {
+        const ItemId    itemId      = 'RUR01';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        boolean         threw       = false;
+
+        Res_TestDataBuilder::setDeliveryPolicy('RUR01CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 10);
+        Res_TestDataBuilder::salesLine(item, 'RUR01CU', warehouse, 10, today + 10);
+
+        ResDemandLineTmp demandTmp = this.reserveWholeDemandAndReturnBuffer(itemId);
+        ResDemandLineTmp demandLine;
+        container recIds;
+
+        demandLine.setTmpData(demandTmp);
+        while select demandLine
+        {
+            recIds += demandLine.RecId;
+        }
+
+        try
+        {
+            ResReservationEngine engine = ResReservationEngine::construct();
+            engine.unreserve(demandTmp, recIds, '', '');
+        }
+        catch (Exception::Error)
+        {
+            threw = true;
+        }
+
+        this.assertTrue(threw, 'Unreserve with a blank reason code must throw / be blocked.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>unreserveReturnsQtyToAvailableForReservation</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void unreserveReturnsQtyToAvailableForReservation()
+    {
+        const ItemId    itemId      = 'RUR02';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        ResReasonCodeId reasonCode  = Res_TestDataBuilder::reasonCode('RUR02RC', 'Test reason');
+
+        Res_TestDataBuilder::setDeliveryPolicy('RUR02CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 10);
+        Res_TestDataBuilder::salesLine(item, 'RUR02CU', warehouse, 10, today + 10);
+
+        ResDemandLineTmp demandTmp = this.reserveWholeDemandAndReturnBuffer(itemId);
+
+        ResSupplyLineTmp supplyBefore, supplyLineBefore;
+        ResSupplyProvider::run(supplyBefore, [itemId], '', warehouse.InventLocationId);
+        supplyLineBefore.setTmpData(supplyBefore);
+        select firstonly supplyLineBefore;
+        this.assertTrue(supplyLineBefore.QtyReserved == 10, 'Sanity check: line should be fully reserved before Unreserve.');
+
+        // Re-fetch demand so we have live RecIds/ReservedQty to select for Unreserve.
+        ResDemandLineTmp demandTmp2, demandLine2;
+        container recIds;
+        ResDemandProvider::run(demandTmp2, '', '', itemId, dateNull(), dateNull());
+        demandLine2.setTmpData(demandTmp2);
+        while select demandLine2
+        {
+            if (demandLine2.ReservedQty > 0)
+            {
+                recIds += demandLine2.RecId;
+            }
+        }
+
+        ResReservationEngine engine = ResReservationEngine::construct();
+        engine.unreserve(demandTmp2, recIds, reasonCode, 'released for test');
+
+        ResSupplyLineTmp supplyAfter, supplyLineAfter;
+        ResSupplyProvider::run(supplyAfter, [itemId], '', warehouse.InventLocationId);
+        supplyLineAfter.setTmpData(supplyAfter);
+        select firstonly supplyLineAfter;
+
+        this.assertTrue(supplyLineAfter.QtyReserved == 0, 'Unreserve should return the qty to Available for Reservation on the supply record.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>unreserveWritesReasonAndCommentToHistoryLog</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void unreserveWritesReasonAndCommentToHistoryLog()
+    {
+        const ItemId    itemId      = 'RUR03';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        ResReasonCodeId reasonCode  = Res_TestDataBuilder::reasonCode('RUR03RC', 'Test reason');
+        ResCommentTxt   comment     = 'customer changed their mind';
+
+        Res_TestDataBuilder::setDeliveryPolicy('RUR03CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 10);
+        var salesLine = Res_TestDataBuilder::salesLine(item, 'RUR03CU', warehouse, 10, today + 10);
+
+        this.reserveWholeDemandAndReturnBuffer(itemId);
+
+        ResDemandLineTmp demandTmp2, demandLine2;
+        container recIds;
+        ResDemandProvider::run(demandTmp2, '', '', itemId, dateNull(), dateNull());
+        demandLine2.setTmpData(demandTmp2);
+        while select demandLine2
+        {
+            if (demandLine2.ReservedQty > 0)
+            {
+                recIds += demandLine2.RecId;
+            }
+        }
+
+        ResReservationEngine engine = ResReservationEngine::construct();
+        engine.unreserve(demandTmp2, recIds, reasonCode, comment);
+
+        ResHistoryLog log;
+        select firstonly log
+            where log.Action == ResAction::Unreserve
+            &&    log.OrderId == salesLine.SalesId;
+
+        this.assertTrue(log.RecId != 0, 'Expected an Unreserve row in ResHistoryLog.');
+        this.assertTrue(log.ReasonCode == reasonCode, 'Logged reason code should match what was supplied.');
+        this.assertTrue(log.Comment == comment, 'Logged comment should match what was supplied.');
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

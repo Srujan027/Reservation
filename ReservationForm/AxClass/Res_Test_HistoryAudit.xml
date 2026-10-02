@@ -1,0 +1,188 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_Test_HistoryAudit</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// FDD section 7 -- reservation history / audit log.
+/// </summary>
+[SysTestCaseAutomaticNumberSequences]
+public class Res_Test_HistoryAudit extends SysTestCase
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>reserveWholeDemand</Name>
+				<Source><![CDATA[
+    private ResReservationEngine reserveWholeDemand(ItemId _itemId)
+    {
+        ResDemandLineTmp    demandTmp;
+        ResDemandLineTmp    demandLine;
+        container           recIds;
+        ResReservationEngine engine;
+
+        ResDemandProvider::run(demandTmp, '', '', _itemId, dateNull(), dateNull());
+
+        demandLine.setTmpData(demandTmp);
+        while select demandLine
+        {
+            recIds += demandLine.RecId;
+        }
+
+        engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, recIds);
+
+        return engine;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reserveLogsCorrectFieldsIncludingUserAndTimestamp</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void reserveLogsCorrectFieldsIncludingUserAndTimestamp()
+    {
+        const ItemId    itemId    = 'RHA01';
+        InventTable     item      = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today     = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setDeliveryPolicy('RHA01CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 10);
+
+        var salesLine = Res_TestDataBuilder::salesLine(item, 'RHA01CU', warehouse, 10, today + 10);
+
+        this.reserveWholeDemand(itemId);
+
+        ResHistoryLog log;
+        select firstonly log
+            where log.Action == ResAction::Reserve
+            &&    log.OrderId == salesLine.SalesId;
+
+        this.assertTrue(log.RecId != 0, 'Expected a Reserve row in ResHistoryLog.');
+        this.assertTrue(log.OrderType == ResOrderType::Sales, 'OrderType should be Sales.');
+        this.assertTrue(log.LineNum == salesLine.LineNum, 'LineNum should match the sales line.');
+        this.assertTrue(log.QtyAffected == 10, 'QtyAffected should be the full reserved quantity.');
+        this.assertTrue(strLen(log.RuleApplied) > 0, 'RuleApplied should describe which allocation rule/source was used.');
+        this.assertTrue(log.CreatedBy == curUserId(), 'The log row should be attributed to the executing user.');
+        this.assertTrue(log.CreatedDateTime != DateTimeUtil::minValue(), 'The log row should carry a creation timestamp.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>skipLogsCorrectReasonLabel</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void skipLogsCorrectReasonLabel()
+    {
+        const ItemId    itemId    = 'RHA02';
+        InventTable     item      = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today     = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setDeliveryPolicy('RHA02CU', NoYes::No, NoYes::No);
+        // Deliberately no supply -> "no eligible supply" skip reason.
+
+        var salesLine = Res_TestDataBuilder::salesLine(item, 'RHA02CU', warehouse, 10, today + 10);
+
+        this.reserveWholeDemand(itemId);
+
+        ResHistoryLog log;
+        select firstonly log
+            where log.Action == ResAction::Skip
+            &&    log.OrderId == salesLine.SalesId;
+
+        this.assertTrue(log.RecId != 0, 'Expected a Skip row in ResHistoryLog.');
+        this.assertTrue(log.RuleApplied == "@ResReservation:ResReservationEngine_NoEligibleSupply",
+            'Skip reason should be the "no eligible supply" label when there is no supply at all.');
+        this.assertTrue(log.QtyAffected == 10, 'QtyAffected on a Skip row should be the full unmet quantity.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>summaryCountsReconcileWithDistinctHistoryLines</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// A mixed-batch partial split produces *two* Reserve rows for the same
+    /// demand line (one per batch/source committed) -- so the completion
+    /// summary counts must be checked against the count of *distinct*
+    /// (OrderType, OrderId, LineNum) combinations in the history log for
+    /// this run, not the raw row count.
+    /// </summary>
+    [SysTestMethod]
+    public void summaryCountsReconcileWithDistinctHistoryLines()
+    {
+        const ItemId    fullItemId  = 'RHA03A';
+        const ItemId    splitItemId = 'RHA03B';
+        const ItemId    skipItemId  = 'RHA03C';
+        InventTable     fullItem    = Res_TestDataBuilder::nonBatchItem(fullItemId);
+        InventTable     splitItem   = Res_TestDataBuilder::batchItem(splitItemId);
+        InventTable     skipItem    = Res_TestDataBuilder::nonBatchItem(skipItemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        var batch1 = Res_TestDataBuilder::createBatch(splitItem, today + 5);
+        var batch2 = Res_TestDataBuilder::createBatch(splitItem, today + 60);
+
+        Res_TestDataBuilder::setDeliveryPolicy('RHA03CU', NoYes::Yes, NoYes::Yes);
+        Res_TestDataBuilder::addOnHand(fullItem, [warehouse], 10);
+        Res_TestDataBuilder::addOnHand(splitItem, [warehouse, batch1], 4);
+        Res_TestDataBuilder::addOnHand(splitItem, [warehouse, batch2], 20);
+        // skipItem: no supply at all.
+
+        var fullLine  = Res_TestDataBuilder::salesLine(fullItem,  'RHA03CU', warehouse, 10, today + 10);
+        var splitLine = Res_TestDataBuilder::salesLine(splitItem, 'RHA03CU', warehouse, 10, today + 10);
+        var skipLine  = Res_TestDataBuilder::salesLine(skipItem,  'RHA03CU', warehouse, 10, today + 10);
+
+        ResDemandLineTmp demandTmp, demandLine;
+        container recIds;
+        ResDemandProvider::run(demandTmp, '', '', '', dateNull(), dateNull());
+        demandLine.setTmpData(demandTmp);
+        while select demandLine
+        {
+            if (demandLine.OrderId == fullLine.SalesId || demandLine.OrderId == splitLine.SalesId || demandLine.OrderId == skipLine.SalesId)
+            {
+                recIds += demandLine.RecId;
+            }
+        }
+
+        ResReservationEngine engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, recIds);
+
+        this.assertTrue(engine.parmLinesFullyReserved() == 2, 'Both the single-batch line and the split-batch line should end up fully reserved.');
+        this.assertTrue(engine.parmLinesSkipped() == 1, 'The zero-supply line should be skipped.');
+
+        Set reserveLineKeys = new Set(Types::String);
+        Set skipLineKeys    = new Set(Types::String);
+        ResHistoryLog log;
+
+        while select log
+            where (log.OrderId == fullLine.SalesId || log.OrderId == splitLine.SalesId || log.OrderId == skipLine.SalesId)
+        {
+            str key = enum2str(log.OrderType) + '|' + log.OrderId + '|' + num2str(log.LineNum, 0, 0, 0, 0);
+
+            if (log.Action == ResAction::Reserve)
+            {
+                reserveLineKeys.add(key);
+            }
+            else if (log.Action == ResAction::Skip)
+            {
+                skipLineKeys.add(key);
+            }
+        }
+
+        this.assertTrue(reserveLineKeys.elements() == engine.parmLinesFullyReserved() + engine.parmLinesPartiallyReserved(),
+            'Count of distinct lines with at least one Reserve row should equal fully-reserved + partially-reserved from the summary.');
+        this.assertTrue(skipLineKeys.elements() == engine.parmLinesSkipped(),
+            'Count of distinct skipped lines should equal the skipped count in the summary.');
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEnum xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResRiskIndicator</Name>
+	<UseEnumValue>No</UseEnumValue>
+	<EnumValues>
+		<AxEnumValue>
+			<Name>Green</Name>
+			<Label>@ResReservation:ResRiskIndicator_Green</Label>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Yellow</Name>
+			<Label>@ResReservation:ResRiskIndicator_Yellow</Label>
+			<Value>1</Value>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Red</Name>
+			<Label>@ResReservation:ResRiskIndicator_Red</Label>
+			<Value>2</Value>
+		</AxEnumValue>
+	</EnumValues>
+	<Label>@ResReservation:ResRiskIndicator</Label>
+	<IsExtensible>true</IsExtensible>
+</AxEnum>

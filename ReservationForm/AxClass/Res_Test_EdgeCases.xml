@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_Test_EdgeCases</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// FDD section 7 -- edge cases, plus a moderate-scale smoke test toward the
+/// FDD section 12 non-functional target (~2,000 demand lines / ~5,000 supply
+/// records). Full-scale load testing at that target is explicitly out of
+/// scope for this pass (per instruction) and is called out as a follow-up
+/// performance test rather than silently skipped.
+/// </summary>
+[SysTestCaseAutomaticNumberSequences]
+public class Res_Test_EdgeCases extends SysTestCase
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>reserveWithNoSelectedLinesProcessesNothing</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Engine-level guarantee behind "Reserve clicked with zero visible
+    /// Demand rows -> no processing". The exact "no open demand lines"
+    /// warning message and its wiring to the Reserve button live in
+    /// <c>ResReservationScreen.reserveSelected()</c> (form/UI code) -- that
+    /// part is manual UAT. What the engine itself must guarantee is that an
+    /// empty selection is a no-op: no reservations committed, no history
+    /// rows written, no exception.
+    /// </summary>
+    [SysTestMethod]
+    public void reserveWithNoSelectedLinesProcessesNothing()
+    {
+        const ItemId    itemId    = 'REC01';
+        InventTable     item      = Res_TestDataBuilder::nonBatchItem(itemId);
+        ResDemandLineTmp demandTmp;
+        container        emptySelection;
+
+        ResDemandProvider::run(demandTmp, '', '', itemId, dateNull(), dateNull());
+
+        ResReservationEngine engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, emptySelection);
+
+        this.assertTrue(engine.parmLinesFullyReserved() == 0, 'Nothing should be fully reserved.');
+        this.assertTrue(engine.parmLinesPartiallyReserved() == 0, 'Nothing should be partially reserved.');
+        this.assertTrue(engine.parmLinesSkipped() == 0, 'Nothing should even be counted as skipped -- there was nothing to process.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>unreserveOnZeroReservedLineIsExcludedNotErrored</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// <c>ResReservationEngine.unreserve()</c> itself guards
+    /// <c>demandLine.ReservedQty &gt; 0</c> per selected RecId (defense in
+    /// depth behind the form's own <c>selectedDemandRecIds(true)</c> pre-filter)
+    /// -- a never-reserved line passed through is silently excluded rather
+    /// than erroring or logging a spurious Unreserve row.
+    /// </summary>
+    [SysTestMethod]
+    public void unreserveOnZeroReservedLineIsExcludedNotErrored()
+    {
+        const ItemId    itemId      = 'REC02';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        ResReasonCodeId reasonCode  = Res_TestDataBuilder::reasonCode('REC02RC', 'Test reason');
+
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 10);
+        var salesLine = Res_TestDataBuilder::salesLine(item, 'REC02CU', warehouse, 10, today + 10);
+        // Deliberately never reserved -- ReservedQty stays 0.
+
+        ResDemandLineTmp demandTmp, demandLine;
+        container recIds;
+        ResDemandProvider::run(demandTmp, '', '', itemId, dateNull(), dateNull());
+        demandLine.setTmpData(demandTmp);
+        select firstonly demandLine where demandLine.OrderId == salesLine.SalesId;
+        recIds += demandLine.RecId;
+
+        ResReservationEngine engine = ResReservationEngine::construct();
+        engine.unreserve(demandTmp, recIds, reasonCode, '');
+
+        ResHistoryLog log;
+        select firstonly log where log.OrderId == salesLine.SalesId;
+
+        this.assertTrue(log.RecId == 0, 'No history row should be written for a line that was never reserved.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>moderateScaleReserveRunProducesCorrectCounts</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Smoke test at a moderate scale (100 demand lines / 100 supply
+    /// records) to confirm no errors and internally-consistent counts as
+    /// volume grows. This does NOT validate the FDD section 12 non-functional
+    /// target of ~2,000 demand lines / ~5,000 supply records -- that needs a
+    /// dedicated performance/load test run outside a unit-test transaction
+    /// and is out of scope for this pass; flagging it here rather than
+    /// silently dropping the requirement.
+    /// </summary>
+    [SysTestMethod]
+    public void moderateScaleReserveRunProducesCorrectCounts()
+    {
+        const ItemId    itemId      = 'REC03';
+        const int       lineCount   = 100;
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+        int             i;
+
+        Res_TestDataBuilder::setDeliveryPolicy('REC03CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse], lineCount * 10); // enough for every line
+
+        for (i = 1; i <= lineCount; i++)
+        {
+            // Spread requested ship dates so sort-key collisions (see
+            // Res_Test_PrioritySequencing.identicalSortKeysSilentlyDropALine)
+            // don't mask the count for this smoke test.
+            Res_TestDataBuilder::salesLine(item, 'REC03CU', warehouse, 10, today + 10 + i);
+        }
+
+        ResDemandLineTmp demandTmp, demandLine;
+        container recIds;
+        ResDemandProvider::run(demandTmp, '', '', itemId, dateNull(), dateNull());
+        demandLine.setTmpData(demandTmp);
+        while select demandLine
+        {
+            recIds += demandLine.RecId;
+        }
+
+        this.assertTrue(conLen(recIds) == lineCount, 'Sanity check: expected all ' + int2str(lineCount) + ' demand lines to be visible.');
+
+        ResReservationEngine engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, recIds);
+
+        this.assertTrue(engine.parmLinesFullyReserved() == lineCount,
+            'With ample supply and distinct sort keys, every line should fully reserve at this moderate scale.');
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

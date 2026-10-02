@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxSecurityRole xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResReservationManagerRole</Name>
+	<Description>@ResReservation:ResReservationManagerRole_Description</Description>
+	<Label>@ResReservation:ResReservationManagerRole</Label>
+	<DirectAccessPermissions />
+	<Duties>
+		<AxSecurityDutyReference>
+			<Name>ResReservationExecute</Name>
+		</AxSecurityDutyReference>
+	</Duties>
+	<Privileges />
+	<SubRoles />
+</AxSecurityRole>

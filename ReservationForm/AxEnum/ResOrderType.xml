@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEnum xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResOrderType</Name>
+	<UseEnumValue>No</UseEnumValue>
+	<EnumValues>
+		<AxEnumValue>
+			<Name>Sales</Name>
+			<Label>@ResReservation:ResOrderType_Sales</Label>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Transfer</Name>
+			<Label>@ResReservation:ResOrderType_Transfer</Label>
+			<Value>1</Value>
+		</AxEnumValue>
+	</EnumValues>
+	<Label>@ResReservation:ResOrderType</Label>
+	<IsExtensible>true</IsExtensible>
+</AxEnum>

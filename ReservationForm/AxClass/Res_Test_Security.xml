@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_Test_Security</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// FDD section 7 -- security. "Does user X, holding duty Y, see/click
+/// button Z" is fundamentally a logged-in-as-a-different-user UI question
+/// that a single SysTestCase run (one identity, one transaction) cannot
+/// exercise end-to-end -- that verification belongs entirely to the manual
+/// UAT script (SEC-01/02/03).
+/// </summary>
+/// <remarks>
+/// FIXED: <c>ReserveButton</c>/<c>UnreserveButton</c> are plain <c>Button</c>
+/// controls with no entry point of their own, so neither
+/// <c>ResReservationScreen_DM_View</c> nor <c>_AM_Execute</c> could trim them
+/// declaratively the way <c>SetupButton</c> (a MenuFunctionButton tied to its
+/// own secured menu item) is trimmed automatically. <c>ResReservationScreen</c>
+/// now overrides <c>enabled()</c> on both buttons, gated by a new
+/// <c>canExecuteReservations()</c> helper that checks
+/// <c>SecurityRights::hasAccessToPrivilege(privilegeStr(ResReservationScreen_AM_Execute), AccessType::Update)</c>
+/// -- confirm end-to-end as a View-only user in the manual script.
+/// Separately: the only shipped role, <c>ResReservationManagerRole</c>,
+/// still only bundles the Execute duty -- a new
+/// <c>ResReservationAdministratorRole</c> now packages the Administer duty
+/// on its own, so Setup access no longer requires assigning the duty
+/// directly with no role to attach it to.
+/// </remarks>
+[SysTestCaseAutomaticNumberSequences]
+public class Res_Test_Security extends SysTestCase
+{
+}
+]]></Declaration>
+		<Methods />
+	</SourceCode>
+</AxClass>

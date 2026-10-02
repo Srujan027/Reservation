@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEnum xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResAllocationMethod</Name>
+	<UseEnumValue>No</UseEnumValue>
+	<EnumValues>
+		<AxEnumValue>
+			<Name>FEFO</Name>
+			<Label>@ResReservation:ResAllocationMethod_FEFO</Label>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>FIFO</Name>
+			<Label>@ResReservation:ResAllocationMethod_FIFO</Label>
+			<Value>1</Value>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>LIFO</Name>
+			<Label>@ResReservation:ResAllocationMethod_LIFO</Label>
+			<Value>2</Value>
+		</AxEnumValue>
+	</EnumValues>
+	<Label>@ResReservation:ResAllocationMethod</Label>
+	<IsExtensible>true</IsExtensible>
+</AxEnum>

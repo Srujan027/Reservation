@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEnum xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResReservationStatus</Name>
+	<UseEnumValue>No</UseEnumValue>
+	<EnumValues>
+		<AxEnumValue>
+			<Name>None</Name>
+			<Label>@ResReservation:ResReservationStatus_None</Label>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Partial</Name>
+			<Label>@ResReservation:ResReservationStatus_Partial</Label>
+			<Value>1</Value>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Full</Name>
+			<Label>@ResReservation:ResReservationStatus_Full</Label>
+			<Value>2</Value>
+		</AxEnumValue>
+	</EnumValues>
+	<Label>@ResReservation:ResReservationStatus</Label>
+	<IsExtensible>true</IsExtensible>
+</AxEnum>

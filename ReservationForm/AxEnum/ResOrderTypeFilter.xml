@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEnum xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResOrderTypeFilter</Name>
+	<UseEnumValue>No</UseEnumValue>
+	<EnumValues>
+		<AxEnumValue>
+			<Name>All</Name>
+			<Label>@ResReservation:ResOrderTypeFilter_All</Label>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Sales</Name>
+			<Label>@ResReservation:ResOrderType_Sales</Label>
+			<Value>1</Value>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Transfer</Name>
+			<Label>@ResReservation:ResOrderType_Transfer</Label>
+			<Value>2</Value>
+		</AxEnumValue>
+	</EnumValues>
+	<Label>@ResReservation:ResOrderTypeFilter</Label>
+	<IsExtensible>true</IsExtensible>
+</AxEnum>

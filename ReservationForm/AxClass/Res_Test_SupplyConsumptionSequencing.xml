@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_Test_SupplyConsumptionSequencing</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// FDD section 7 -- supply consumption and sequencing effects within one
+/// Reserve run.
+/// </summary>
+[SysTestCaseAutomaticNumberSequences]
+public class Res_Test_SupplyConsumptionSequencing extends SysTestCase
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>reserveWholeDemand</Name>
+				<Source><![CDATA[
+    private ResReservationEngine reserveWholeDemand(ItemId _itemId)
+    {
+        ResDemandLineTmp    demandTmp;
+        ResDemandLineTmp    demandLine;
+        container           recIds;
+        ResReservationEngine engine;
+
+        ResDemandProvider::run(demandTmp, '', '', _itemId, dateNull(), dateNull());
+
+        demandLine.setTmpData(demandTmp);
+        while select demandLine
+        {
+            recIds += demandLine.RecId;
+        }
+
+        engine = ResReservationEngine::construct();
+        engine.reserve(demandTmp, recIds);
+
+        return engine;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>higherPriorityConsumesSupplyFirstNoDoubleAllocation</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Two same-warehouse Sales lines competing for the same limited pool of
+    /// on-hand supply: the higher-priority (tier 1) line should get the
+    /// supply it needs, leaving strictly less for the lower-priority
+    /// (tier 2) line processed afterwards in the same run -- i.e. no
+    /// double-allocation of the same units.
+    /// </summary>
+    [SysTestMethod]
+    public void higherPriorityConsumesSupplyFirstNoDoubleAllocation()
+    {
+        const ItemId    itemId      = 'RSC01';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse   = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setPriorityRule('RSC01T1', '', 1);
+        Res_TestDataBuilder::setPriorityRule('RSC01T2', '', 2);
+        Res_TestDataBuilder::setDeliveryPolicy('RSC01T1', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::setDeliveryPolicy('RSC01T2', NoYes::No, NoYes::No);
+
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 12); // covers the tier-1 line (10) plus only 2 of the tier-2 line's 10
+
+        var line1 = Res_TestDataBuilder::salesLine(item, 'RSC01T1', warehouse, 10, today + 10);
+        var line2 = Res_TestDataBuilder::salesLine(item, 'RSC01T2', warehouse, 10, today + 10);
+
+        var engine = this.reserveWholeDemand(itemId);
+
+        this.assertTrue(engine.parmLinesFullyReserved() == 1, 'Tier 1 line should be fully reserved.');
+        this.assertTrue(engine.parmLinesSkipped() == 1,
+            'Tier 2 line should be skipped: only 2 units remain after tier 1 consumed 10 of the 12 on hand, ' +
+            'and AllowPartialDelivery = No for this customer.');
+
+        ResSupplyLineTmp supplyTmp, supplyLine;
+        ResSupplyProvider::run(supplyTmp, [itemId], '', warehouse.InventLocationId);
+        supplyLine.setTmpData(supplyTmp);
+        select firstonly supplyLine;
+
+        this.assertTrue(supplyLine.QtyReserved == 10,
+            'Total reserved against the on-hand pool must be exactly 10 (tier 1 allocation) -- ' +
+            'not 20, which would mean the same units got double-counted across both lines.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>crossWarehouseOnHandShouldNotSatisfyDemand</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// KNOWN MISMATCH: <c>ResReservationEngine.reserve()</c> calls
+    /// <c>ResSupplyProvider::run(supply, itemScope, '', '')</c> with blank
+    /// site/warehouse, and neither <c>eligibleSupplyRecIds</c> nor
+    /// <c>reserveLine</c> filter candidate supply by site/warehouse/
+    /// <c>InventDimId</c> at all. So a demand line at the issuing warehouse
+    /// can be satisfied from on-hand stock that physically sits at a
+    /// completely different warehouse -- which cannot actually be picked
+    /// against that order. This test sets up demand at the issuing
+    /// warehouse with zero local supply, and unrelated on-hand supply only
+    /// at the receiving warehouse; the FDD-correct outcome is that the line
+    /// is skipped for lack of *local* eligible supply. Expected to FAIL
+    /// against the current implementation, which reserves it anyway.
+    /// </summary>
+    [SysTestMethod]
+    public void crossWarehouseOnHandShouldNotSatisfyDemand()
+    {
+        const ItemId    itemId      = 'RSC02';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  issuingWh   = Res_TestDataBuilder::issuingWarehouse();
+        InventLocation  receivingWh = Res_TestDataBuilder::receivingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setDeliveryPolicy('RSC02CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [receivingWh], 20); // unrelated stock, wrong warehouse entirely
+
+        Res_TestDataBuilder::salesLine(item, 'RSC02CU', issuingWh, 10, today + 10);
+
+        var engine = this.reserveWholeDemand(itemId);
+
+        this.assertTrue(engine.parmLinesSkipped() == 1,
+            'Demand at the issuing warehouse has no local supply and must be skipped, ' +
+            'not silently filled from stock sitting at an unrelated warehouse.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>transferInTransitShipmentNotAvailableToUnrelatedWarehouseDemand</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// KNOWN MISMATCH (same root cause as
+    /// <see cref="crossWarehouseOnHandShouldNotSatisfyDemand"/>): an
+    /// in-transit Transfer shipment landing at the receiving warehouse is
+    /// supply for whatever eventually needs stock *there* -- it is not
+    /// available to cover a Sales demand line at the issuing warehouse. This
+    /// most directly reproduces the FDD's "a Transfer order's own in-transit
+    /// shipment must not satisfy its own [other] warehouse's demand" case.
+    /// Expected to FAIL against the current implementation.
+    /// </summary>
+    [SysTestMethod]
+    public void transferInTransitShipmentNotAvailableToUnrelatedWarehouseDemand()
+    {
+        const ItemId    itemId      = 'RSC03';
+        InventTable     item        = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  issuingWh   = Res_TestDataBuilder::issuingWarehouse();
+        InventLocation  receivingWh = Res_TestDataBuilder::receivingWarehouse();
+        TransDate       today       = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setDeliveryPolicy('RSC03CU', NoYes::No, NoYes::No);
+
+        // Stock for this item exists only in transit toward the receiving warehouse.
+        Res_TestDataBuilder::transferInTransitLine(item, issuingWh, receivingWh, 15);
+
+        // Unrelated demand at the issuing warehouse -- should have zero eligible local supply.
+        Res_TestDataBuilder::salesLine(item, 'RSC03CU', issuingWh, 10, today + 10);
+
+        var engine = this.reserveWholeDemand(itemId);
+
+        this.assertTrue(engine.parmLinesSkipped() == 1,
+            'A shipment in transit to the receiving warehouse cannot cover demand at the issuing warehouse.');
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

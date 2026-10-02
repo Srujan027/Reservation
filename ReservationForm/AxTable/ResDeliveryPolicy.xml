@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxTable xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResDeliveryPolicy</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+public class ResDeliveryPolicy extends common
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>validateWrite</Name>
+				<Source><![CDATA[
+    public boolean validateWrite()
+    {
+        boolean ret = super();
+
+        if (!this.CustAccount && !this.CustGroup)
+        {
+            ret = checkFailed("@ResReservation:ResDeliveryPolicy_ScopeRequired");
+        }
+
+        if (this.MinFillPercentage < 0 || this.MinFillPercentage > 100)
+        {
+            ret = ret && checkFailed("@ResReservation:ResDeliveryPolicy_FillRange");
+        }
+
+        return ret;
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+	<Label>@ResReservation:ResDeliveryPolicy</Label>
+	<TableGroup>Group</TableGroup>
+	<TitleField1>CustAccount</TitleField1>
+	<TitleField2>AllowPartialDelivery</TitleField2>
+	<DeleteActions />
+	<FieldGroups>
+		<AxTableFieldGroup>
+			<Name>AutoLookup</Name>
+			<Fields>
+				<AxTableFieldGroupField>
+					<DataField>CustAccount</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>CustGroup</DataField>
+				</AxTableFieldGroupField>
+			</Fields>
+		</AxTableFieldGroup>
+		<AxTableFieldGroup>
+			<Name>AutoIdentification</Name>
+			<AutoPopulate>Yes</AutoPopulate>
+			<Fields />
+		</AxTableFieldGroup>
+		<AxTableFieldGroup>
+			<Name>AutoSummary</Name>
+			<Fields />
+		</AxTableFieldGroup>
+		<AxTableFieldGroup>
+			<Name>AutoBrowse</Name>
+			<Fields />
+		</AxTableFieldGroup>
+		<AxTableFieldGroup>
+			<Name>AllFields</Name>
+			<Label>@SYS80094</Label>
+			<Fields>
+				<AxTableFieldGroupField>
+					<DataField>CustAccount</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>CustGroup</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>AllowPartialDelivery</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>AllowMixedBatch</DataField>
+				</AxTableFieldGroupField>
+				<AxTableFieldGroupField>
+					<DataField>MinFillPercentage</DataField>
+				</AxTableFieldGroupField>
+			</Fields>
+		</AxTableFieldGroup>
+	</FieldGroups>
+	<Fields>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldString">
+			<Name>CustAccount</Name>
+			<ExtendedDataType>CustAccount</ExtendedDataType>
+			<Label>@ResReservation:ResDeliveryPolicy_CustAccount</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldString">
+			<Name>CustGroup</Name>
+			<ExtendedDataType>CustGroupId</ExtendedDataType>
+			<Label>@ResReservation:ResDeliveryPolicy_CustGroup</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldEnum">
+			<Name>AllowPartialDelivery</Name>
+			<EnumType>NoYes</EnumType>
+			<Label>@ResReservation:ResDeliveryPolicy_AllowPartialDelivery</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldEnum">
+			<Name>AllowMixedBatch</Name>
+			<EnumType>NoYes</EnumType>
+			<Label>@ResReservation:ResDeliveryPolicy_AllowMixedBatch</Label>
+		</AxTableField>
+		<AxTableField xmlns=""
+			i:type="AxTableFieldReal">
+			<Name>MinFillPercentage</Name>
+			<ExtendedDataType>ResFillPercentage</ExtendedDataType>
+			<HelpText>@ResReservation:ResDeliveryPolicy_MinFillPercentage_Help</HelpText>
+			<Label>@ResReservation:ResDeliveryPolicy_MinFillPercentage</Label>
+		</AxTableField>
+	</Fields>
+	<FullTextIndexes />
+	<Indexes>
+		<AxTableIndex>
+			<Name>ScopeIdx</Name>
+			<AllowDuplicates>Yes</AllowDuplicates>
+			<Fields>
+				<AxTableIndexField>
+					<DataField>CustAccount</DataField>
+				</AxTableIndexField>
+				<AxTableIndexField>
+					<DataField>CustGroup</DataField>
+				</AxTableIndexField>
+			</Fields>
+		</AxTableIndex>
+	</Indexes>
+	<Mappings />
+	<Relations>
+		<AxTableRelation xmlns=""
+			i:type="AxTableRelationForeignKey">
+			<Name>CustTable</Name>
+			<Cardinality>ZeroMore</Cardinality>
+			<RelatedTable>CustTable</RelatedTable>
+			<RelatedTableCardinality>ZeroOne</RelatedTableCardinality>
+			<RelationshipType>Association</RelationshipType>
+			<Constraints>
+				<AxTableRelationConstraint xmlns=""
+					i:type="AxTableRelationConstraintField">
+					<Name>CustAccount</Name>
+					<Field>CustAccount</Field>
+					<RelatedField>AccountNum</RelatedField>
+				</AxTableRelationConstraint>
+			</Constraints>
+		</AxTableRelation>
+		<AxTableRelation xmlns=""
+			i:type="AxTableRelationForeignKey">
+			<Name>CustGroup</Name>
+			<Cardinality>ZeroMore</Cardinality>
+			<RelatedTable>CustGroup</RelatedTable>
+			<RelatedTableCardinality>ZeroOne</RelatedTableCardinality>
+			<RelationshipType>Association</RelationshipType>
+			<Constraints>
+				<AxTableRelationConstraint xmlns=""
+					i:type="AxTableRelationConstraintField">
+					<Name>CustGroup</Name>
+					<Field>CustGroup</Field>
+					<RelatedField>CustGroup</RelatedField>
+				</AxTableRelationConstraint>
+			</Constraints>
+		</AxTableRelation>
+	</Relations>
+	<StateMachines />
+</AxTable>

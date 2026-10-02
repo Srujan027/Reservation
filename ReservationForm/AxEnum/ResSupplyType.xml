@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxEnum xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResSupplyType</Name>
+	<UseEnumValue>No</UseEnumValue>
+	<EnumValues>
+		<AxEnumValue>
+			<Name>OnHand</Name>
+			<Label>@ResReservation:ResSupplyType_OnHand</Label>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Purchase</Name>
+			<Label>@ResReservation:ResSupplyType_Purchase</Label>
+			<Value>1</Value>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>Production</Name>
+			<Label>@ResReservation:ResSupplyType_Production</Label>
+			<Value>2</Value>
+		</AxEnumValue>
+		<AxEnumValue>
+			<Name>TransferInTransit</Name>
+			<Label>@ResReservation:ResSupplyType_TransferInTransit</Label>
+			<Value>3</Value>
+		</AxEnumValue>
+	</EnumValues>
+	<Label>@ResReservation:ResSupplyType</Label>
+	<IsExtensible>true</IsExtensible>
+</AxEnum>

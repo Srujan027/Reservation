@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_Test_RiskIndicator</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// FDD section 7 -- risk indicator (Green/Yellow/Red).
+/// </summary>
+[SysTestCaseAutomaticNumberSequences]
+public class Res_Test_RiskIndicator extends SysTestCase
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>riskFor</Name>
+				<Source><![CDATA[
+    private ResRiskIndicator riskFor(ItemId _itemId, InventTransRefId _orderId)
+    {
+        ResDemandLineTmp demandTmp, demandLine;
+
+        ResDemandProvider::run(demandTmp, '', '', _itemId, dateNull(), dateNull());
+        demandLine.setTmpData(demandTmp);
+
+        select firstonly demandLine where demandLine.OrderId == _orderId;
+
+        return demandLine.RiskIndicator;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>greenWellAheadOfShipDate</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void greenWellAheadOfShipDate()
+    {
+        const ItemId    itemId    = 'RRI01';
+        InventTable     item      = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today     = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setRiskThreshold(10, 3);
+        Res_TestDataBuilder::setDeliveryPolicy('RRI01CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 10);
+
+        var salesLine = Res_TestDataBuilder::salesLine(item, 'RRI01CU', warehouse, 10, today + 30);
+
+        this.assertTrue(this.riskFor(itemId, salesLine.SalesId) == ResRiskIndicator::Green,
+            'A ship date 30 days out, well beyond the 10-day yellow threshold, should be Green.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>yellowWithinThresholdWindow</Name>
+				<Source><![CDATA[
+    [SysTestMethod]
+    public void yellowWithinThresholdWindow()
+    {
+        const ItemId    itemId    = 'RRI02';
+        InventTable     item      = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today     = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setRiskThreshold(10, 3); // Yellow: <= 10 days out, Red: <= 3 days out
+        Res_TestDataBuilder::setDeliveryPolicy('RRI02CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 10);
+
+        var salesLine = Res_TestDataBuilder::salesLine(item, 'RRI02CU', warehouse, 10, today + 7);
+
+        this.assertTrue(this.riskFor(itemId, salesLine.SalesId) == ResRiskIndicator::Yellow,
+            'A ship date 7 days out (inside the 10-day yellow window, outside the 3-day red window) should be Yellow.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>redInsufficientSupplyIsNotImplemented</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// KNOWN MISMATCH: <c>ResSetupRules.riskIndicator</c> takes only the
+    /// requested ship date -- it has no supply/quantity input at all, and is
+    /// called from <c>ResDemandProvider</c> without ever comparing against
+    /// available supply. So "insufficient matching supply shows Red" is not
+    /// implemented: a line can have zero eligible supply anywhere and still
+    /// show Green, purely because its ship date is far out. This test is
+    /// written to the FDD's expectation and is expected to FAIL.
+    /// </summary>
+    [SysTestMethod]
+    public void redInsufficientSupplyIsNotImplemented()
+    {
+        const ItemId    itemId    = 'RRI03';
+        InventTable     item      = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today     = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setRiskThreshold(10, 3);
+        Res_TestDataBuilder::setDeliveryPolicy('RRI03CU', NoYes::No, NoYes::No);
+        // Deliberately no supply created for this item at all.
+
+        var salesLine = Res_TestDataBuilder::salesLine(item, 'RRI03CU', warehouse, 10, today + 365);
+
+        this.assertTrue(this.riskFor(itemId, salesLine.SalesId) == ResRiskIndicator::Red,
+            'A line with zero eligible supply anywhere should read as high risk (Red) regardless of how far out the ship date is.');
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>recalculatesFromCurrentThresholdsOnRefresh</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Confirms the indicator is recomputed live from whatever
+    /// <c>ResRiskThreshold</c> currently holds every time the Demands grid is
+    /// re-queried (i.e. on Refresh/Reserve/Unreserve) -- not cached from when
+    /// the line was first created.
+    /// </summary>
+    [SysTestMethod]
+    public void recalculatesFromCurrentThresholdsOnRefresh()
+    {
+        const ItemId    itemId    = 'RRI04';
+        InventTable     item      = Res_TestDataBuilder::nonBatchItem(itemId);
+        InventLocation  warehouse = Res_TestDataBuilder::issuingWarehouse();
+        TransDate       today     = DateTimeUtil::date(DateTimeUtil::utcNow());
+
+        Res_TestDataBuilder::setRiskThreshold(2, 1);
+        Res_TestDataBuilder::setDeliveryPolicy('RRI04CU', NoYes::No, NoYes::No);
+        Res_TestDataBuilder::addOnHand(item, [warehouse], 10);
+
+        var salesLine = Res_TestDataBuilder::salesLine(item, 'RRI04CU', warehouse, 10, today + 7);
+
+        this.assertTrue(this.riskFor(itemId, salesLine.SalesId) == ResRiskIndicator::Green,
+            'With tight thresholds (yellow <= 2 days), a 7-day-out line should start Green.');
+
+        Res_TestDataBuilder::setRiskThreshold(10, 3); // widen the yellow window without touching the demand line itself
+
+        this.assertTrue(this.riskFor(itemId, salesLine.SalesId) == ResRiskIndicator::Yellow,
+            'Re-querying the Demands grid after the threshold setup changed should immediately reflect the new thresholds -- Yellow now.');
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

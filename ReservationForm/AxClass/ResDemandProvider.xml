@@ -1,0 +1,305 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>ResDemandProvider</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// Builds the Demands grid data: open Sales order lines and open Transfer order
+/// lines (issuing warehouse side), unioned into <c>ResDemandLineTmp</c> with
+/// Order Type, Priority Tier, Risk Indicator and Reservation Status computed per
+/// FDD section 6.1.
+/// </summary>
+/// <remarks>
+/// "Open" for a sales line is <c>RemainInventPhysical &gt; 0</c> on an order whose
+/// header has passed quotation (<c>DocumentStatus &gt;= DocumentStatus::Confirmation</c>).
+/// "Open" for a transfer line is <c>QtyRemainShip &gt; 0</c> on the issuing side.
+/// Reserved quantity is computed the same way <c>SalesLine.mcrSalesQtyReserved</c>
+/// does in the standard product: sum <c>InventTrans.Qty</c> for the line's
+/// <c>InventTransOrigin</c> where <c>StatusIssue</c> is <c>ReservPhysical</c> or
+/// <c>ReservOrdered</c>.
+/// </remarks>
+public class ResDemandProvider
+{
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>run</Name>
+				<Source><![CDATA[
+    public static void run(
+        ResDemandLineTmp    _demandLineTmp,
+        InventSiteId        _siteId,
+        InventLocationId    _warehouseId,
+        ItemId              _itemId,
+        TransDate           _fromDate,
+        TransDate           _toDate,
+        ResOrderTypeFilter  _orderTypeFilter = ResOrderTypeFilter::All,
+        InventTransRefId    _orderId         = '')
+    {
+        delete_from _demandLineTmp;
+
+        if (_orderTypeFilter != ResOrderTypeFilter::Transfer)
+        {
+            ResDemandProvider::insertSalesLines(_demandLineTmp, _siteId, _warehouseId, _itemId, _fromDate, _toDate, _orderId);
+        }
+
+        if (_orderTypeFilter != ResOrderTypeFilter::Sales)
+        {
+            ResDemandProvider::insertTransferLines(_demandLineTmp, _siteId, _warehouseId, _itemId, _fromDate, _toDate, _orderId);
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reservedQtySales</Name>
+				<Source><![CDATA[
+    private static Qty reservedQtySales(SalesLine _salesLine)
+    {
+        InventTrans         inventTrans;
+        InventTransOrigin   inventTransOrigin;
+
+        select sum(Qty) from inventTrans
+            exists join inventTransOrigin
+            where inventTrans.InventTransOrigin    == inventTransOrigin.RecId
+            &&    inventTransOrigin.InventTransId  == _salesLine.InventTransId
+            &&    inventTrans.StatusReceipt        == StatusReceipt::None
+            &&   (inventTrans.StatusIssue          == StatusIssue::ReservPhysical
+            ||    inventTrans.StatusIssue          == StatusIssue::ReservOrdered);
+
+        return -inventTrans.Qty;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reservedQtyTransfer</Name>
+				<Source><![CDATA[
+    private static Qty reservedQtyTransfer(InventTransferLine _transferLine)
+    {
+        InventTrans         inventTrans;
+        InventTransOrigin   inventTransOrigin;
+
+        select sum(Qty) from inventTrans
+            exists join inventTransOrigin
+            where inventTrans.InventTransOrigin    == inventTransOrigin.RecId
+            &&    inventTransOrigin.InventTransId  == _transferLine.InventTransId
+            &&    inventTrans.StatusReceipt        == StatusReceipt::None
+            &&   (inventTrans.StatusIssue          == StatusIssue::ReservPhysical
+            ||    inventTrans.StatusIssue          == StatusIssue::ReservOrdered);
+
+        return -inventTrans.Qty;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>currentReservedQty</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Live reserved quantity for a demand line's source document, computed
+    /// straight from <c>InventTrans</c> at call time -- used by
+    /// <c>ResReservationEngine</c> to verify that a Reserve/Unreserve action
+    /// actually changed the underlying reservation before logging it as
+    /// successful, since <c>InventUpd_Reservation::updateReserveBuffer</c>
+    /// silently does nothing if it cannot build a movement for the buffer,
+    /// with no exception and no other signal.
+    /// </summary>
+    public static Qty currentReservedQty(ResOrderType _orderType, RefRecId _refRecId)
+    {
+        SalesLine           salesLine;
+        InventTransferLine  transferLine;
+
+        if (_orderType == ResOrderType::Sales)
+        {
+            select firstonly salesLine where salesLine.RecId == _refRecId;
+            return ResDemandProvider::reservedQtySales(salesLine);
+        }
+
+        select firstonly transferLine where transferLine.RecId == _refRecId;
+        return ResDemandProvider::reservedQtyTransfer(transferLine);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reservationStatus</Name>
+				<Source><![CDATA[
+    private static ResReservationStatus reservationStatus(Qty _openQty, Qty _reservedQty)
+    {
+        if (_reservedQty <= 0)
+        {
+            return ResReservationStatus::None;
+        }
+
+        if (_reservedQty >= _openQty)
+        {
+            return ResReservationStatus::Full;
+        }
+
+        return ResReservationStatus::Partial;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>totalEligibleSupply</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Total quantity available for reservation across every supply type
+    /// (on-hand, PO, production, in-transit transfer) for one item at one
+    /// site/warehouse -- used to feed <see cref="ResSetupRules.riskIndicator"/>
+    /// so a line with no realistic way to be covered reads as high risk
+    /// regardless of how far out its ship date is.
+    /// </summary>
+    private static Qty totalEligibleSupply(ItemId _itemId, InventSiteId _siteId, InventLocationId _warehouseId)
+    {
+        ResSupplyLineTmp    supplyTmp;
+        ResSupplyLineTmp    supplyLine;
+        Qty                 total;
+
+        ResSupplyProvider::run(supplyTmp, [_itemId], _siteId, _warehouseId);
+
+        supplyLine.setTmpData(supplyTmp);
+        while select supplyLine
+        {
+            total += (supplyLine.AvailableForReservation - supplyLine.QtyReserved);
+        }
+
+        return total;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>insertSalesLines</Name>
+				<Source><![CDATA[
+    private static void insertSalesLines(
+        ResDemandLineTmp    _demandLineTmp,
+        InventSiteId        _siteId,
+        InventLocationId    _warehouseId,
+        ItemId              _itemId,
+        TransDate           _fromDate,
+        TransDate           _toDate,
+        InventTransRefId    _orderId)
+    {
+        SalesLine   salesLine;
+        SalesTable  salesTable;
+        InventDim   inventDim;
+        Qty         openQty;
+        Qty         reservedQty;
+        NoYes       insufficientSupply;
+
+        while select salesLine
+            join salesTable
+            where salesTable.SalesId       == salesLine.SalesId
+            &&    salesTable.SalesStatus   != SalesStatus::Canceled
+            //&&    salesTable.DocumentStatus != DocumentStatus::None
+            &&    salesTable.DocumentStatus != DocumentStatus::Quotation
+            &&    salesLine.RemainInventPhysical > 0
+            &&   (!_itemId       || salesLine.ItemId == _itemId)
+            &&   (!_orderId      || salesLine.SalesId == _orderId)
+            &&   (!_fromDate     || salesLine.ShippingDateRequested >= _fromDate)
+            &&   (!_toDate       || salesLine.ShippingDateRequested <= _toDate)
+            join inventDim
+            where inventDim.inventDimId == salesLine.InventDimId
+            &&   (!_siteId       || inventDim.InventSiteId     == _siteId)
+            &&   (!_warehouseId  || inventDim.InventLocationId == _warehouseId)
+        {
+            openQty     = salesLine.RemainInventPhysical;
+            reservedQty = ResDemandProvider::reservedQtySales(salesLine);
+            insufficientSupply = ((openQty - reservedQty) > ResDemandProvider::totalEligibleSupply(salesLine.ItemId, inventDim.InventSiteId, inventDim.InventLocationId))
+                ? NoYes::Yes : NoYes::No;
+
+            _demandLineTmp.clear();
+            _demandLineTmp.OrderType           = ResOrderType::Sales;
+            _demandLineTmp.OrderId             = salesLine.SalesId;
+            _demandLineTmp.LineNum              = salesLine.LineNum;
+            _demandLineTmp.ItemId               = salesLine.ItemId;
+            _demandLineTmp.InventSiteId         = inventDim.InventSiteId;
+            _demandLineTmp.InventLocationId     = inventDim.InventLocationId;
+            _demandLineTmp.InventDimId          = salesLine.InventDimId;
+            _demandLineTmp.CustAccount          = salesTable.CustAccount;
+            _demandLineTmp.RequestedShipDate    = salesLine.ShippingDateRequested;
+            _demandLineTmp.OpenQty              = openQty;
+            _demandLineTmp.ReservedQty          = reservedQty;
+            _demandLineTmp.PriorityTier         = ResSetupRules::priorityTier(salesTable.CustAccount, CustTable::find(salesTable.CustAccount).CustGroup);
+            _demandLineTmp.RiskIndicator        = ResSetupRules::riskIndicator(salesLine.ShippingDateRequested, insufficientSupply);
+            _demandLineTmp.ReservationStatus    = ResDemandProvider::reservationStatus(openQty, reservedQty);
+            _demandLineTmp.RefTableId           = tableNum(SalesLine);
+            _demandLineTmp.RefRecId             = salesLine.RecId;
+            _demandLineTmp.insert();
+        }
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>insertTransferLines</Name>
+				<Source><![CDATA[
+    private static void insertTransferLines(
+        ResDemandLineTmp    _demandLineTmp,
+        InventSiteId        _siteId,
+        InventLocationId    _warehouseId,
+        ItemId              _itemId,
+        TransDate           _fromDate,
+        TransDate           _toDate,
+        InventTransRefId    _orderId)
+    {
+        InventTransferLine  transferLine;
+        InventTransferTable transferTable;
+        InventSiteId        issuingSiteId;
+        Qty                 openQty;
+        Qty                 reservedQty;
+        NoYes               insufficientSupply;
+
+        while select transferLine
+            join transferTable
+            where transferTable.TransferId          == transferLine.TransferId
+            &&    transferLine.QtyRemainShip > 0
+            &&   (!_warehouseId  || transferTable.InventLocationIdFrom == _warehouseId)
+            &&   (!_itemId       || transferLine.ItemId == _itemId)
+            &&   (!_orderId      || transferLine.TransferId == _orderId)
+            &&   (!_fromDate     || transferTable.ShipDate >= _fromDate)
+            &&   (!_toDate       || transferTable.ShipDate <= _toDate)
+        {
+            // InventTransferTable does not carry the site directly; derive it from
+            // the issuing warehouse so the site filter still applies uniformly.
+            issuingSiteId = InventLocation::find(transferTable.InventLocationIdFrom).InventSiteId;
+
+            if (_siteId && issuingSiteId != _siteId)
+            {
+                continue;
+            }
+
+            openQty     = transferLine.QtyRemainShip;
+            reservedQty = ResDemandProvider::reservedQtyTransfer(transferLine);
+            insufficientSupply = ((openQty - reservedQty) > ResDemandProvider::totalEligibleSupply(transferLine.ItemId, issuingSiteId, transferTable.InventLocationIdFrom))
+                ? NoYes::Yes : NoYes::No;
+
+            _demandLineTmp.clear();
+            _demandLineTmp.OrderType           = ResOrderType::Transfer;
+            _demandLineTmp.OrderId             = transferLine.TransferId;
+            _demandLineTmp.LineNum              = transferLine.LineNum;
+            _demandLineTmp.ItemId               = transferLine.ItemId;
+            _demandLineTmp.InventSiteId         = issuingSiteId;
+            _demandLineTmp.InventLocationId     = transferTable.InventLocationIdFrom;
+            _demandLineTmp.InventDimId          = transferLine.InventDimId;
+            _demandLineTmp.CustAccount          = '';
+            _demandLineTmp.RequestedShipDate    = transferTable.ShipDate;
+            _demandLineTmp.OpenQty              = openQty;
+            _demandLineTmp.ReservedQty          = reservedQty;
+            _demandLineTmp.PriorityTier         = 5;
+            _demandLineTmp.RiskIndicator        = ResSetupRules::riskIndicator(transferTable.ShipDate, insufficientSupply);
+            _demandLineTmp.ReservationStatus    = ResDemandProvider::reservationStatus(openQty, reservedQty);
+            _demandLineTmp.RefTableId           = tableNum(InventTransferLine);
+            _demandLineTmp.RefRecId             = transferLine.RecId;
+            _demandLineTmp.insert();
+        }
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>

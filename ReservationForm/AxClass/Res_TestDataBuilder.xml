@@ -1,0 +1,569 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AxClass xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+	<Name>Res_TestDataBuilder</Name>
+	<SourceCode>
+		<Declaration><![CDATA[
+/// <summary>
+/// Shared test-data fixtures for the Reservation Workbench SysTestCase suite
+/// (<c>Res_Test_*</c>). Builds on the standard ATL test-data framework
+/// (<c>AtlDataRootNode</c>) for master data / Sales / Purchase / Transfer /
+/// Production, and does direct table access for the module's own setup
+/// tables (<c>ResPriorityRule</c>, <c>ResAllocationRule</c>, etc.) since no
+/// ATL builder exists for those.
+/// </summary>
+/// <remarks>
+/// Two things depend on your environment and may need adjusting the first
+/// time this suite is compiled:
+/// <list type="bullet">
+/// <item>The exact fluent method names on <c>AtlEntityInventTransferOrder</c>
+/// and <c>AtlEntityProductionOrder</c> (addLine/setQuantity-style calls) --
+/// written here to match the same pattern <c>AtlEntitySalesOrder</c> and
+/// <c>AtlEntityPurchaseOrder</c> use elsewhere in this ATL version, but not
+/// individually verified against those two specific classes.</item>
+/// <item><see cref="quarantineStatusId"/> posts a movement journal to get a
+/// batch onto a specific <c>WHSInventStatusId</c>. <c>ResReservationEngine</c>
+/// itself hardcodes the literal status id 'Quarantine' (see its
+/// <c>#QuarantineStatusId</c> macro) -- if this environment's quarantine
+/// status uses a different id, update both that macro and the constant below
+/// to match.</item>
+/// </list>
+/// </remarks>
+public final class Res_TestDataBuilder
+{
+    const WHSInventStatusId QuarantineStatusIdValue = 'Quarantine';
+}
+]]></Declaration>
+		<Methods>
+			<Method>
+				<Name>data</Name>
+				<Source><![CDATA[
+    private static AtlDataRootNode data()
+    {
+        return AtlDataRootNode::construct();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>site</Name>
+				<Source><![CDATA[
+    public static InventSite site()
+    {
+        return Res_TestDataBuilder::data().invent().sites().default();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>issuingWarehouse</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// The "from" warehouse used by every Transfer-order scenario.
+    /// </summary>
+    public static InventLocation issuingWarehouse()
+    {
+        return Res_TestDataBuilder::data().invent().warehouses().default();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>receivingWarehouse</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// The "to" warehouse used by every Transfer-order scenario.
+    /// </summary>
+    public static InventLocation receivingWarehouse()
+    {
+        return Res_TestDataBuilder::data().invent().warehouses().defaultOther();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>nonBatchItem</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// A simple, non-batch-tracked item -- for FIFO / non-batch scenarios.
+    /// </summary>
+    public static InventTable nonBatchItem(ItemId _itemId = 'ResTestNB')
+    {
+        return Res_TestDataBuilder::data().invent().items().default(_itemId);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>batchItem</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// A batch-tracked item -- for FEFO / mixed-batch / quarantine scenarios.
+    /// </summary>
+    public static InventTable batchItem(ItemId _itemId = 'ResTestBatch')
+    {
+        return Res_TestDataBuilder::data().invent().items().batchEnabled(_itemId);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>createBatch</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Creates a new batch for <paramref name="_item"/>, optionally stamping
+    /// its expiry date (needed for FEFO / near-expiry scenarios).
+    /// </summary>
+    public static InventBatch createBatch(InventTable _item, TransDate _expDate = dateNull())
+    {
+        InventBatch batch = Res_TestDataBuilder::data().invent().batches().create(_item);
+
+        if (_expDate)
+        {
+            ttsbegin;
+            batch.selectForUpdate(true);
+            batch.expDate = _expDate;
+            batch.update();
+            ttscommit;
+        }
+
+        return batch;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>addOnHand</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Adds on-hand, quality-approved physical inventory for
+    /// <paramref name="_item"/> at the given dimension combination (e.g.
+    /// <c>[warehouse]</c> or <c>[warehouse, batch]</c>).
+    /// </summary>
+    public static void addOnHand(InventTable _item, container _inventDims, InventQty _qty)
+    {
+        Res_TestDataBuilder::data().invent().onHand().adjust()
+            .forItem(_item)
+            .forInventDims(_inventDims)
+            .addOnHandQty(_qty);
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>quarantineStatusId</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Ensures the 'Quarantine' inventory status referenced by
+    /// <c>ResReservationEngine</c>'s <c>#QuarantineStatusId</c> macro exists.
+    /// </summary>
+    public static WHSInventStatusId quarantineStatusId()
+    {
+        WHSInventStatus inventStatus = WHSInventStatus::find(QuarantineStatusIdValue, true);
+
+        if (!inventStatus.RecId)
+        {
+            ttsbegin;
+            inventStatus.InventStatusId = QuarantineStatusIdValue;
+            inventStatus.insert();
+            ttscommit;
+        }
+
+        return QuarantineStatusIdValue;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>addOnHandAtStatus</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Adds on-hand for a batch sitting under a specific
+    /// <c>WHSInventStatusId</c> (e.g. quarantine), via a posted movement
+    /// journal -- the on-hand fixture helpers only cover the default,
+    /// quality-approved status.
+    /// </summary>
+    public static void addOnHandAtStatus(
+        InventTable         _item,
+        InventLocation      _warehouse,
+        InventBatchId       _batchId,
+        WHSInventStatusId   _statusId,
+        InventQty           _qty)
+    {
+        InventDim           inventDim;
+        InventJournalName   journalName;
+        InventJournalTable  journalTable;
+        InventJournalTrans  journalTrans;
+
+        inventDim.InventSiteId     = _warehouse.InventSiteId;
+        inventDim.InventLocationId = _warehouse.InventLocationId;
+        inventDim.inventBatchId    = _batchId;
+        inventDim.InventStatusId   = _statusId;
+        inventDim                  = InventDim::findOrCreate(inventDim);
+
+        select firstonly journalName
+            where journalName.JournalType == InventJournalType::Movement;
+
+        if (!journalName.RecId)
+        {
+            throw error('No Movement-type inventory journal name is configured in this company -- ' +
+                'set one up under Inventory management > Setup > Journal names > Movement first.');
+        }
+
+        ttsbegin;
+
+        journalTable.JournalNameId = journalName.JournalNameId;
+        journalTable.JournalType   = InventJournalType::Movement;
+        journalTable.initValue();
+        journalTable.insert();
+
+        journalTrans.JournalId   = journalTable.JournalId;
+        journalTrans.ItemId      = _item.ItemId;
+        journalTrans.InventDimId = inventDim.InventDimId;
+        journalTrans.Qty         = _qty;
+        journalTrans.TransDate   = DateTimeUtil::date(DateTimeUtil::utcNow());
+        journalTrans.initFromInventTable(_item);
+        journalTrans.insert();
+
+        InventJournalCheckPost::newPostJournal(journalTable).runOperation();
+
+        ttscommit;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>customer</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// Finds or creates a customer in the given customer group.
+    /// </summary>
+    public static CustAccount customer(CustAccount _custAccount, CustGroupId _custGroup)
+    {
+        var customerGroup = Res_TestDataBuilder::data().cust().customerGroups().custGroup(_custGroup);
+        var customer = Res_TestDataBuilder::data().cust().customers().findOrCreateDefault(_custAccount);
+
+        if (CustTable::find(_custAccount).CustGroup != _custGroup)
+        {
+            ttsbegin;
+            CustTable custTable = CustTable::find(_custAccount, true);
+            custTable.CustGroup = _custGroup;
+            custTable.update();
+            ttscommit;
+        }
+
+        return _custAccount;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>salesLine</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// An open Sales order line (confirmed, nothing delivered) for the given
+    /// item/customer/warehouse/requested-ship-date, sized so that
+    /// <paramref name="_qty"/> is greater than whatever supply the test set
+    /// up, when the caller wants to force a partial/skip outcome.
+    /// </summary>
+    public static SalesLine salesLine(
+        InventTable     _item,
+        CustAccount     _custAccount,
+        InventLocation  _warehouse,
+        SalesQty        _qty,
+        TransDate       _requestedShipDate)
+    {
+        Res_TestDataBuilder::data().cust().customers().findOrCreateDefault(_custAccount);
+        var salesOrder = Res_TestDataBuilder::data().sales().salesOrders().create(_custAccount);
+
+        var salesOrderLine = salesOrder.addLine()
+            .setItem(_item)
+            .setQuantity(_qty)
+            .setInventDims([_warehouse])
+            .save();
+
+        SalesLine salesLine = salesOrderLine.record();
+        ttsbegin;
+        salesLine.selectForUpdate(true);
+        salesLine.ShippingDateRequested = _requestedShipDate;
+        salesLine.update();
+        ttscommit;
+
+        return salesLine;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>transferLine</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// An open Transfer order line (nothing shipped yet) from
+    /// <paramref name="_fromWarehouse"/> to <paramref name="_toWarehouse"/>.
+    /// </summary>
+    public static InventTransferLine transferLine(
+        InventTable     _item,
+        InventLocation  _fromWarehouse,
+        InventLocation  _toWarehouse,
+        Qty             _qty,
+        TransDate       _shipDate)
+    {
+        var transferOrder = Res_TestDataBuilder::data().invent().transferOrders().createDefault(_fromWarehouse, _toWarehouse);
+
+        var transferOrderLine = transferOrder.addLine()
+            .setItem(_item)
+            .setQuantity(_qty)
+            .setInventDims([_fromWarehouse])
+            .save();
+
+        InventTransferTable transferTable = InventTransferTable::find(transferOrder.parmTransferId(), true);
+        transferTable.selectForUpdate(true);
+        ttsbegin;
+        transferTable.ShipDate = _shipDate;
+        transferTable.update();
+        ttscommit;
+
+        return transferOrderLine.record();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>transferInTransitLine</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// A Transfer order line that has already been shipped -- appears as
+    /// <c>ResSupplyType::TransferInTransit</c> supply at the receiving
+    /// warehouse, per <c>ResSupplyProvider.insertTransferInTransit</c>.
+    /// </summary>
+    public static InventTransferLine transferInTransitLine(
+        InventTable     _item,
+        InventLocation  _fromWarehouse,
+        InventLocation  _toWarehouse,
+        Qty             _qty)
+    {
+        var transferOrder = Res_TestDataBuilder::data().invent().transferOrders().createDefault(_fromWarehouse, _toWarehouse);
+
+        var transferOrderLine = transferOrder.addLine()
+            .setItem(_item)
+            .setQuantity(_qty)
+            .setInventDims([_fromWarehouse])
+            .save();
+
+        transferOrder.postPickingList(InventTransferPickUpdateQty::All);
+        transferOrder.ship();
+
+        return transferOrderLine.record();
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>openPurchLine</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// An open (confirmed, not yet received) Purchase order line -- appears
+    /// as <c>ResSupplyType::Purchase</c> supply.
+    /// </summary>
+    public static PurchLine openPurchLine(InventTable _item, InventLocation _warehouse, PurchQty _qty, TransDate _deliveryDate)
+    {
+        var purchaseOrder = Res_TestDataBuilder::data().purch().purchaseOrders().createDefault();
+
+        var purchaseOrderLine = purchaseOrder.addLine()
+            .setItem(_item)
+            .setQuantity(_qty)
+            .setInventDims([_warehouse])
+            .save();
+
+        purchaseOrder.confirm();
+
+        PurchLine purchLine = purchaseOrderLine.record();
+        ttsbegin;
+        purchLine.selectForUpdate(true);
+        purchLine.DeliveryDate = _deliveryDate;
+        purchLine.update();
+        ttscommit;
+
+        return purchLine;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>openProdReceipt</Name>
+				<Source><![CDATA[
+    /// <summary>
+    /// An open (not reported-finished) Production order -- appears as
+    /// <c>ResSupplyType::Production</c> supply.
+    /// </summary>
+    public static ProdTable openProdReceipt(InventTable _item, InventLocation _warehouse, ProdQtySched _qty, TransDate _schedEnd)
+    {
+        var productionOrder = Res_TestDataBuilder::data().prod().productionOrders().createDefault(_item, [_warehouse]);
+
+        ProdTable prodTable = productionOrder.record();
+        ttsbegin;
+        prodTable.selectForUpdate(true);
+        prodTable.QtySched  = _qty;
+        prodTable.SchedEnd  = _schedEnd;
+        prodTable.update();
+        ttscommit;
+
+        return prodTable;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>setPriorityRule</Name>
+				<Source><![CDATA[
+    public static ResPriorityRule setPriorityRule(CustAccount _custAccount, CustGroupId _custGroup, ResPriorityTier _tier)
+    {
+        ResPriorityRule priorityRule;
+
+        ttsbegin;
+        priorityRule.clear();
+        priorityRule.CustAccount   = _custAccount;
+        priorityRule.CustGroup     = _custGroup;
+        priorityRule.PriorityTier  = _tier;
+        priorityRule.insert();
+        ttscommit;
+
+        return priorityRule;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>setAllocationRule</Name>
+				<Source><![CDATA[
+    public static ResAllocationRule setAllocationRule(
+        ItemId              _itemId,
+        ResAllocationMethod _method,
+        ResThresholdDays    _nearExpiryBlockDays,
+        NoYes               _allowQuarantined)
+    {
+        ResAllocationRule allocationRule;
+
+        ttsbegin;
+        allocationRule.clear();
+        allocationRule.ItemId              = _itemId;
+        allocationRule.AllocationMethod     = _method;
+        allocationRule.NearExpiryBlockDays  = _nearExpiryBlockDays;
+        allocationRule.AllowQuarantined     = _allowQuarantined;
+        allocationRule.insert();
+        ttscommit;
+
+        return allocationRule;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>setDeliveryPolicy</Name>
+				<Source><![CDATA[
+    public static ResDeliveryPolicy setDeliveryPolicy(
+        CustAccount _custAccount,
+        NoYes       _allowPartial,
+        NoYes       _allowMixedBatch,
+        ResFillPercentage _minFillPercentage = 0)
+    {
+        ResDeliveryPolicy deliveryPolicy;
+
+        ttsbegin;
+        deliveryPolicy.clear();
+        deliveryPolicy.CustAccount          = _custAccount;
+        deliveryPolicy.AllowPartialDelivery = _allowPartial;
+        deliveryPolicy.AllowMixedBatch      = _allowMixedBatch;
+        deliveryPolicy.MinFillPercentage    = _minFillPercentage;
+        deliveryPolicy.insert();
+        ttscommit;
+
+        return deliveryPolicy;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>setOrderTypePolicy</Name>
+				<Source><![CDATA[
+    public static ResOrderTypePolicy setOrderTypePolicy(NoYes _salesAlwaysOutranksTransfer, NoYes _transferAllowPartial)
+    {
+        ResOrderTypePolicy orderTypePolicy = ResOrderTypePolicy::find(true);
+
+        ttsbegin;
+
+        if (!orderTypePolicy.RecId)
+        {
+            orderTypePolicy.clear();
+            orderTypePolicy.SalesAlwaysOutranksTransfer = _salesAlwaysOutranksTransfer;
+            orderTypePolicy.TransferAllowPartial        = _transferAllowPartial;
+            orderTypePolicy.insert();
+        }
+        else
+        {
+            orderTypePolicy.SalesAlwaysOutranksTransfer = _salesAlwaysOutranksTransfer;
+            orderTypePolicy.TransferAllowPartial        = _transferAllowPartial;
+            orderTypePolicy.update();
+        }
+
+        ttscommit;
+
+        return orderTypePolicy;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>setRiskThreshold</Name>
+				<Source><![CDATA[
+    public static ResRiskThreshold setRiskThreshold(ResThresholdDays _yellowDays, ResThresholdDays _redDays)
+    {
+        ResRiskThreshold riskThreshold = ResRiskThreshold::find(true);
+
+        ttsbegin;
+
+        if (!riskThreshold.RecId)
+        {
+            riskThreshold.clear();
+            riskThreshold.YellowThresholdDays  = _yellowDays;
+            riskThreshold.RedThresholdDays      = _redDays;
+            riskThreshold.insert();
+        }
+        else
+        {
+            riskThreshold.YellowThresholdDays = _yellowDays;
+            riskThreshold.RedThresholdDays     = _redDays;
+            riskThreshold.update();
+        }
+
+        ttscommit;
+
+        return riskThreshold;
+    }
+
+]]></Source>
+			</Method>
+			<Method>
+				<Name>reasonCode</Name>
+				<Source><![CDATA[
+    public static ResReasonCodeId reasonCode(ResReasonCodeId _code, Description _description)
+    {
+        ResReasonCode reasonCode;
+
+        if (!ResReasonCode::exist(_code))
+        {
+            ttsbegin;
+            reasonCode.clear();
+            reasonCode.ReasonCode  = _code;
+            reasonCode.Description = _description;
+            reasonCode.insert();
+            ttscommit;
+        }
+
+        return _code;
+    }
+
+]]></Source>
+			</Method>
+		</Methods>
+	</SourceCode>
+</AxClass>
